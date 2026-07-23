@@ -14,6 +14,7 @@
     statusBox: document.getElementById('beta-production-status'),
     progressBar: document.getElementById('beta-progress-bar'),
     gemini: document.getElementById('beta-gemini'),
+    geminiRetry: document.getElementById('beta-gemini-retry'),
     channelResults: document.getElementById('beta-channel-results'),
     preview: document.getElementById('beta-preview'),
     audio: document.getElementById('beta-audio'),
@@ -164,33 +165,61 @@ ${content.podcast_80 || content.podcast_script || content.script || ''}`;
     }
   }
 
+  async function betaRetryGemini() {
+    if (!betaCurrentJobId || !betaUi.geminiRetry) return;
+    betaUi.geminiRetry.disabled = true;
+    betaSetStatus('Gemini 작업을 다시 대기열에 등록하는 중...', 15);
+    try {
+      await betaRequest(`/beta-api/gemini-worker/jobs/${encodeURIComponent(betaCurrentJobId)}/retry`, { method: 'POST' });
+      betaUi.geminiRetry.hidden = true;
+      betaUi.geminiRetry.disabled = false;
+      await betaWaitForGemini();
+    } catch (error) {
+      betaSetStatus(`Gemini 재전송 실패: ${error.message}`);
+      betaUi.geminiRetry.hidden = false;
+      betaUi.geminiRetry.disabled = false;
+    }
+  }
+
+  async function betaWaitForGemini() {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 240000) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const status = await betaRequest('/beta-api/gemini-worker/status');
+      const worker = status.data || {};
+      if (worker.job_id !== betaCurrentJobId) continue;
+      const workerStatus = worker.status || '대기 중';
+      const progress = workerStatus === 'sent' ? 35 : workerStatus === 'claimed' ? 24 : 18;
+      betaSetStatus(`Gemini 웹 Worker 상태: ${workerStatus}`, progress);
+      if (workerStatus === 'error') {
+        if (betaUi.geminiRetry) betaUi.geminiRetry.hidden = false;
+        throw new Error(worker.error || 'Gemini Worker 처리 실패');
+      }
+      if (workerStatus === 'completed') {
+        const data = await betaRequest(`/beta-api/jobs/${encodeURIComponent(betaCurrentJobId)}`);
+        betaShowContent(data.job);
+        betaSetStatus('콘텐츠 자동생성이 완료되었습니다. 채널별 결과를 확인하세요.', 100);
+        betaUi.gemini.disabled = false;
+        if (betaUi.geminiRetry) betaUi.geminiRetry.hidden = true;
+        requestAnimationFrame(() => {
+          betaUi.channelResults?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          betaUi.channelResults?.focus({ preventScroll: true });
+        });
+        return;
+      }
+    }
+    if (betaUi.geminiRetry) betaUi.geminiRetry.hidden = false;
+    throw new Error('Gemini Worker 응답 대기 시간이 초과됐습니다. Gemini 탭과 Tampermonkey를 확인하세요.');
+  }
+
   async function betaGenerateGemini() {
     if (!betaCurrentJobId) return;
     betaUi.gemini.disabled = true;
     betaSetStatus('Gemini 웹 Worker 작업을 등록했습니다. 로그인된 Gemini 탭에서 처리 중...', 15);
     try {
       await betaRequest(`/beta-api/gemini-worker/jobs/${encodeURIComponent(betaCurrentJobId)}/queue`, { method: 'POST' });
-      const startedAt = Date.now();
-      while (Date.now() - startedAt < 240000) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        const status = await betaRequest('/beta-api/gemini-worker/status');
-        const worker = status.data || {};
-        if (worker.job_id !== betaCurrentJobId) continue;
-        betaSetStatus(`Gemini 웹 Worker 상태: ${worker.status || '대기 중'}`, worker.status === 'sent' ? 20 : 15);
-        if (worker.status === 'error') throw new Error(worker.error || 'Gemini Worker 처리 실패');
-        if (worker.status === 'completed') {
-          const data = await betaRequest(`/beta-api/jobs/${encodeURIComponent(betaCurrentJobId)}`);
-          betaShowContent(data.job);
-          betaSetStatus('콘텐츠 자동생성이 완료되었습니다. 채널별 결과를 확인하세요.', 100);
-          betaUi.gemini.disabled = false;
-          requestAnimationFrame(() => {
-            betaUi.channelResults?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            betaUi.channelResults?.focus({ preventScroll: true });
-          });
-          return;
-        }
-      }
-      throw new Error('Gemini Worker 응답 대기 시간이 초과됐습니다. Gemini 탭과 Tampermonkey를 확인하세요.');
+      if (betaUi.geminiRetry) betaUi.geminiRetry.hidden = true;
+      await betaWaitForGemini();
     } catch (error) {
       betaSetStatus(`Gemini 작성 실패: ${error.message}`);
       betaUi.gemini.disabled = false;
