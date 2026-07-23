@@ -9,8 +9,10 @@ import secrets
 import shutil
 import sqlite3
 import subprocess
+import urllib.request
+import urllib.error
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 BETA_ROOT = Path(r"F:\StoryMaker_beta")
@@ -324,6 +326,50 @@ def beta_render_job(beta_job_id: str, music_volume: float = Form(0.16)) -> JSONR
     except Exception as exc:
         beta_update_job(beta_job_id, status="failed", progress=0, error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@beta_jobs_router.get("/v1-profile")
+def beta_v1_profile(request: Request) -> JSONResponse:
+    url = "http://127.0.0.1:8011/v1-api/auth/personas"
+    headers = {"Accept": "application/json"}
+    cookie = request.headers.get("cookie", "").strip()
+    authorization = request.headers.get("authorization", "").strip()
+    if cookie:
+        headers["Cookie"] = cookie
+    if authorization:
+        headers["Authorization"] = authorization
+    try:
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code in {401, 403}:
+            return JSONResponse({"ok": True, "authenticated": False, "profile": None})
+        return JSONResponse({"ok": False, "authenticated": False, "profile": None, "detail": f"V1 profile HTTP {exc.code}"})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "authenticated": False, "profile": None, "detail": str(exc)[:300]})
+
+    data = payload.get("data", payload) if isinstance(payload, dict) else payload
+    if isinstance(data, dict):
+        candidates = data.get("items") or data.get("personas") or data.get("results") or data.get("data") or []
+    else:
+        candidates = data
+    if isinstance(candidates, dict):
+        candidates = [candidates]
+    if not isinstance(candidates, list):
+        candidates = []
+    persona = next((item for item in candidates if isinstance(item, dict) and item.get("is_default")), None)
+    if persona is None:
+        persona = next((item for item in candidates if isinstance(item, dict)), None)
+    if not persona:
+        return JSONResponse({"ok": True, "authenticated": True, "profile": None})
+    profile = {
+        "name": persona.get("company_name") or persona.get("business_name") or persona.get("name") or "",
+        "region": persona.get("region") or persona.get("business_region") or persona.get("address") or "",
+        "service": persona.get("service") or persona.get("main_service") or persona.get("business_type") or persona.get("industry") or "",
+        "phone": persona.get("phone") or persona.get("phone_number") or persona.get("tel") or "",
+    }
+    return JSONResponse({"ok": True, "authenticated": True, "profile": profile})
 
 
 @beta_jobs_router.get("/jobs")

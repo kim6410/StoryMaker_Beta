@@ -239,4 +239,29 @@ ${content.podcast_80 || content.podcast_script || content.script || ''}`;
   }
 
   betaRestoreCurrentJob();
+
+  async function fillFromV1Profile() {
+    try {
+      const response = await fetch('/beta-api/v1-profile', { cache: 'no-store', credentials: 'include' });
+      const data = await response.json();
+      const profile = data?.profile;
+      if (!response.ok || !profile) return;
+      const pairs = [
+        [betaUi.businessName, profile.name],
+        [betaUi.businessRegion, profile.region],
+        [betaUi.businessService, profile.service],
+        [betaUi.businessPhone, profile.phone],
+      ];
+      for (const [input, value] of pairs) {
+        if (input && !input.value.trim() && String(value || '').trim()) input.value = String(value).trim();
+      }
+      if (pairs.some(([input]) => input?.value?.trim())) {
+        betaUi.status.textContent = 'V1 로그인 업체정보를 불러왔습니다. 필요하면 수정한 뒤 제작하세요.';
+      }
+    } catch (_) {
+      // V1 로그인이 없거나 연결되지 않으면 기존 수동 입력을 유지합니다.
+    }
+  }
+
+  fillFromV1Profile();
 })();
