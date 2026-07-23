@@ -16,7 +16,7 @@ ROOT = Path(r"F:\StoryMaker_beta")
 JOBS_DIR = ROOT / "data" / "jobs"
 STATE_PATH = ROOT / "data" / "beta_gemini_worker_state.json"
 LOCK = threading.Lock()
-REQUIRED_WORKER_ID = "tampermonkey-beta-v2-2.1.2"
+REQUIRED_WORKER_ID = "tampermonkey-beta-v2-2.1.3"
 
 beta_gemini_worker_router = APIRouter(prefix="/beta-api/gemini-worker", tags=["beta-gemini-worker"])
 
@@ -37,6 +37,18 @@ class WorkerResult(BaseModel):
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def seconds_since(value: str | None) -> float:
+    if not value:
+        return 0.0
+    try:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - parsed).total_seconds())
+    except Exception:
+        return 0.0
 
 
 def read_state() -> dict[str, Any]:
@@ -98,7 +110,7 @@ def save_content(job_id: str, raw_text: str, source: str) -> dict[str, Any]:
 
     (job_dir / "podcast_50.txt").write_text(content["podcast_50"], encoding="utf-8")
     (job_dir / "podcast_80.txt").write_text(content["podcast_80"], encoding="utf-8")
-    script = content["podcast_80"]
+    script = content["podcast_50"]
     (job_dir / "script.txt").write_text(script, encoding="utf-8")
     (job_dir / "podcast_script.txt").write_text(script, encoding="utf-8")
     (job_dir / "gemini_raw.txt").write_text(raw_text, encoding="utf-8")
@@ -134,10 +146,50 @@ def queue_job(job_id: str) -> dict[str, Any]:
 
 @beta_gemini_worker_router.get("/status")
 def worker_status() -> dict[str, Any]:
-    state = read_state()
-    data = {k: v for k, v in state.items() if k != "prompt"}
+    with LOCK:
+        state = read_state()
+        if state.get("status") == "claimed" and seconds_since(state.get("updated_at")) >= 30:
+            retry_count = int(state.get("auto_retry_count", 0) or 0)
+            if retry_count < 1:
+                state["status"] = "pending"
+                state["worker_id"] = None
+                state["error"] = None
+                state["auto_retry_count"] = retry_count + 1
+                state["retry_reason"] = "claimed_timeout"
+                write_state(state)
+            else:
+                state["status"] = "error"
+                state["error"] = "Gemini가 작업을 가져갔지만 30초 안에 전송하지 못했습니다. Gemini 탭을 확인한 뒤 재전송하세요."
+                state["retry_available"] = True
+                write_state(state)
+        data = {k: v for k, v in state.items() if k != "prompt"}
     data["required_worker_id"] = REQUIRED_WORKER_ID
     return {"ok": True, "data": data}
+
+
+@beta_gemini_worker_router.post("/jobs/{job_id}/retry")
+def retry_job(job_id: str) -> dict[str, Any]:
+    load_job(job_id)
+    with LOCK:
+        state = read_state()
+        if state.get("job_id") != job_id:
+            raise HTTPException(status_code=409, detail="현재 Gemini 작업 ID와 일치하지 않습니다.")
+        if not state.get("prompt"):
+            _, _, result = load_job(job_id)
+            payload = BetaGeminiRequest(
+                business=result.get("business", {}),
+                topic=result.get("topic", ""),
+                image_count=max(1, len(result.get("assets", {}).get("images", []))),
+            )
+            state["prompt"] = beta_build_prompt(payload)
+        state["status"] = "pending"
+        state["worker_id"] = None
+        state["error"] = None
+        state["retry_available"] = False
+        state["manual_retry_count"] = int(state.get("manual_retry_count", 0) or 0) + 1
+        state["retried_at"] = now_iso()
+        write_state(state)
+    return {"ok": True, "state": {k: v for k, v in state.items() if k != "prompt"}}
 
 
 @beta_gemini_worker_router.get("/prompt/{job_id}")

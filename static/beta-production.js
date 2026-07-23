@@ -9,12 +9,12 @@
     businessPhone: document.getElementById('beta-business-phone'),
     topic: document.getElementById('beta-topic'),
     images: document.getElementById('beta-images'),
-    music: document.getElementById('beta-music'),
-    musicVolume: document.getElementById('beta-music-volume'),
+    videos: document.getElementById('beta-videos'),
     status: document.getElementById('beta-status'),
-    progress: document.getElementById('beta-progress'),
+    statusBox: document.getElementById('beta-production-status'),
+    progressBar: document.getElementById('beta-progress-bar'),
     gemini: document.getElementById('beta-gemini'),
-    render: document.getElementById('beta-render'),
+    channelResults: document.getElementById('beta-channel-results'),
     preview: document.getElementById('beta-preview'),
     audio: document.getElementById('beta-audio'),
     slotTabs: document.getElementById('beta-slot-tabs'),
@@ -36,7 +36,11 @@
 
   function betaSetStatus(message, progress = 0) {
     betaUi.status.textContent = message;
-    betaUi.progress.value = progress;
+    if (betaUi.progressBar) {
+      betaUi.progressBar.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+      betaUi.progressBar.classList.toggle('complete', progress >= 100);
+    }
+    if (betaUi.statusBox) betaUi.statusBox.classList.toggle('idle', progress <= 0 || progress >= 100);
   }
 
   async function betaRequest(url, options = {}) {
@@ -116,23 +120,20 @@ ${content.podcast_80 || content.podcast_script || content.script || ''}`;
     body.append('business_phone', betaUi.businessPhone.value.trim());
     body.append('topic', betaUi.topic.value.trim());
     for (const file of betaUi.images.files) body.append('images', file);
-    if (betaUi.music.files[0]) body.append('music', betaUi.music.files[0]);
-    betaSetStatus('업체정보를 바탕으로 콘텐츠와 실제 대본을 생성하는 중...', 10);
+    for (const file of betaUi.videos.files) body.append('videos', file);
+    betaUi.gemini.disabled = true;
+    betaSetStatus('작업 공간을 만들고 입력 자료를 정리하는 중...', 8);
     try {
       const data = await betaRequest('/beta-api/jobs', { method: 'POST', body });
       betaCurrentJobId = data.job.beta_job_id;
       sessionStorage.setItem('storymaker_beta_current_job', betaCurrentJobId);
       betaUi.jobId.textContent = betaCurrentJobId;
-      betaUi.gemini.disabled = false;
-      betaUi.render.disabled = false;
-      betaUi.checkJob.disabled = false;
-      betaUi.checkGemini.disabled = false;
-      betaUi.supertonic.disabled = false;
-      betaUi.checkAssets.disabled = false;
       betaShowContent(data.job);
-      betaSetStatus('콘텐츠와 대본 저장 완료. 음성·자막·최종 MP4 제작이 가능합니다.', 20);
+      betaSetStatus('Gemini SNS 8채널 자동생성을 시작합니다...', 18);
+      await betaGenerateGemini();
     } catch (error) {
-      betaSetStatus(`작업 생성 실패: ${error.message}`);
+      betaSetStatus(`콘텐츠 자동생성 실패: ${error.message}`);
+      betaUi.gemini.disabled = false;
     }
   }
 
@@ -148,18 +149,18 @@ ${content.podcast_80 || content.podcast_script || content.script || ''}`;
 
   async function betaCreateSupertonicVoice() {
     if (!betaCurrentJobId) return;
-    betaUi.supertonic.disabled = true;
+    if (betaUi.prepareBrowser) betaUi.prepareBrowser.disabled = true;
     betaSetStatus('Beta 전용 Supertonic 7790에서 실제 음성을 생성하는 중...', 35);
     try {
       const data = await betaRequest(`/beta-api/steps/jobs/${encodeURIComponent(betaCurrentJobId)}/supertonic`, { method: 'POST' });
       betaUi.audio.src = `/beta-api/jobs/${encodeURIComponent(betaCurrentJobId)}/file/audio?t=${Date.now()}`;
       betaUi.audio.hidden = false;
-      betaUi.debug.textContent = `Supertonic 생성 성공\n${JSON.stringify(data, null, 2)}`;
+      if (betaUi.debug) betaUi.debug.textContent = `Supertonic 생성 성공\n${JSON.stringify(data, null, 2)}`;
       betaSetStatus('Beta Supertonic 실제 음성과 MP3 생성 완료.', 45);
     } catch (error) {
-      betaUi.debug.textContent = `Supertonic 생성 실패\n${error.message}`;
+      if (betaUi.debug) betaUi.debug.textContent = `Supertonic 생성 실패\n${error.message}`;
       betaSetStatus(`Supertonic 실패: ${error.message}`);
-      betaUi.supertonic.disabled = false;
+      if (betaUi.prepareBrowser) betaUi.prepareBrowser.disabled = false;
     }
   }
 
@@ -180,7 +181,12 @@ ${content.podcast_80 || content.podcast_script || content.script || ''}`;
         if (worker.status === 'completed') {
           const data = await betaRequest(`/beta-api/jobs/${encodeURIComponent(betaCurrentJobId)}`);
           betaShowContent(data.job);
-          betaSetStatus('Gemini 웹 Worker가 SNS 8채널과 팟캐스트 대본을 저장했습니다.', 25);
+          betaSetStatus('콘텐츠 자동생성이 완료되었습니다. 채널별 결과를 확인하세요.', 100);
+          betaUi.gemini.disabled = false;
+          requestAnimationFrame(() => {
+            betaUi.channelResults?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            betaUi.channelResults?.focus({ preventScroll: true });
+          });
           return;
         }
       }
@@ -212,22 +218,11 @@ ${content.podcast_80 || content.podcast_script || content.script || ''}`;
   }
 
   betaUi.form.addEventListener('submit', betaCreateJob);
-  betaUi.gemini.addEventListener('click', betaGenerateGemini);
-  betaUi.render.addEventListener('click', betaRenderJob);
-  betaUi.checkJob.addEventListener('click', () => betaInspect('작업/SNS 8채널 확인'));
-  betaUi.checkGemini.addEventListener('click', () => betaInspect('Gemini 반영 확인'));
-  betaUi.supertonic.addEventListener('click', betaCreateSupertonicVoice);
   if (betaUi.prepareBrowser) betaUi.prepareBrowser.addEventListener('click', betaCreateSupertonicVoice);
-  betaUi.checkAssets.addEventListener('click', () => betaInspect('MP3/SRT/MP4 확인'));
   async function betaRestoreCurrentJob() {
     if (!betaCurrentJobId) return;
     betaUi.jobId.textContent = betaCurrentJobId;
     betaUi.gemini.disabled = false;
-    betaUi.render.disabled = false;
-    betaUi.checkJob.disabled = false;
-    betaUi.checkGemini.disabled = false;
-    betaUi.supertonic.disabled = false;
-    betaUi.checkAssets.disabled = false;
     try {
       const data = await betaRequest(`/beta-api/jobs/${encodeURIComponent(betaCurrentJobId)}`);
       betaShowContent(data.job);

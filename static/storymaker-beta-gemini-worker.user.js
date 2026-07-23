@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StoryMaker Beta - Gemini Web Worker V2
 // @namespace    storymaker-beta-gemini-worker-v2
-// @version      2.1.2
+// @version      2.1.3
 // @description  StoryMaker Beta dedicated Gemini web worker
 // @match        https://gemini.google.com/*
 // @grant        GM_xmlhttpRequest
@@ -17,7 +17,7 @@
 
   const BACKEND = 'http://192.168.0.62:8021';
   const POLL_MS = 1500;
-  const VERSION = '2.1.2';
+  const VERSION = '2.1.3';
   const SINGLETON = '__STORYMAKER_BETA_GEMINI_WORKER_V2__';
   const ACTIVE_JOB_KEY = 'storymaker_beta_active_gemini_job_id';
 
@@ -360,7 +360,7 @@
       const response = await request('GET', '/beta-api/gemini-worker/status');
       const job = response.data || {};
       if (job.action === 'GENERATE_BETA_GEMINI' && job.job_id) {
-        if (job.status === 'pending') await runJob(job);
+        if (job.status === 'pending' || job.status === 'claimed') await runJob(job);
         else if (job.status === 'sent') await recoverSentJob(job);
       }
     } catch (error) {

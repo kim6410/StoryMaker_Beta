@@ -124,6 +124,19 @@
     return image;
   }
 
+  async function loadVideo(url) {
+    const video = document.createElement('video');
+    video.crossOrigin = 'anonymous';
+    video.muted = true;
+    video.preload = 'auto';
+    video.src = url;
+    await new Promise((resolve, reject) => {
+      video.onloadedmetadata = resolve;
+      video.onerror = () => reject(new Error('삽입 동영상을 불러오지 못했습니다.'));
+    });
+    return video;
+  }
+
   function drawCover(image, progress=0, index=0) {
     if (drawGpuCover(index, progress)) return;
     const cw=ui.canvas.width, ch=ui.canvas.height;
@@ -131,6 +144,15 @@
     const w=image.naturalWidth*scale, h=image.naturalHeight*scale;
     ctx.fillStyle='#000'; ctx.fillRect(0,0,cw,ch);
     ctx.drawImage(image,(cw-w)/2,(ch-h)/2,w,h);
+  }
+
+  function drawVideoCover(video) {
+    const cw=ui.canvas.width, ch=ui.canvas.height;
+    const vw=video.videoWidth || cw, vh=video.videoHeight || ch;
+    const scale=Math.max(cw/vw, ch/vh);
+    const w=vw*scale, h=vh*scale;
+    ctx.fillStyle='#000'; ctx.fillRect(0,0,cw,ch);
+    ctx.drawImage(video,(cw-w)/2,(ch-h)/2,w,h);
   }
 
   async function loadJob() {
@@ -141,7 +163,7 @@
     manifest=data.manifest;
     if (!manifest.voice_wav) throw new Error('먼저 백엔드 음성 준비를 실행해 voice.wav를 생성하세요.');
     ui.mp3.disabled=false; ui.mp4.disabled=false;
-    ui.status.textContent=`작업 준비 완료 · 기본 대본 ${manifest.script_key || 'PODCAST_50'} · 이미지 ${manifest.images.length}장`;
+    ui.status.textContent=`작업 준비 완료 · 기본 대본 ${manifest.script_key || 'PODCAST_50'} · 이미지 ${manifest.images.length}장 · 동영상 ${(manifest.videos || []).length}개`;
   }
 
   function parseWav(buffer) {
@@ -189,6 +211,9 @@
     const d=refreshDiag();
     if(!d.mp4MimeType) throw new Error('이 브라우저는 MP4 MediaRecorder를 지원하지 않습니다.');
     const images=await Promise.all(manifest.images.map(loadImage));
+    const videos=await Promise.all((manifest.videos || []).map(loadVideo));
+    const media=[...images.map((item,index)=>({type:'image',item,index})),...videos.map((item)=>({type:'video',item}))];
+    if (!media.length) throw new Error('렌더링할 이미지 또는 동영상이 없습니다.');
     if (!gpu.ready) await initWebGPU().catch(()=>false);
     await prepareGpuTextures(images).catch(()=>{});
     const wavBuffer=await fetch(manifest.voice_wav).then(r=>r.arrayBuffer());
@@ -204,8 +229,16 @@
     recorder.start(1000); source.start();
     await new Promise(resolve=>{
       function frame(now){
-        const t=(now-started)/1000, p=Math.min(1,t/duration), slot=Math.min(images.length-1,Math.floor(p*images.length));
-        const local=(p*images.length)-slot; drawCover(images[slot],local,slot);
+        const t=(now-started)/1000, p=Math.min(1,t/duration), slot=Math.min(media.length-1,Math.floor(p*media.length));
+        const local=(p*media.length)-slot, current=media[slot];
+        if(current.type==='video'){
+          const clipDuration=Math.max(current.item.duration || 0,0.1);
+          const targetTime=Math.min(clipDuration-0.03,Math.max(0,local*clipDuration));
+          if(Math.abs(current.item.currentTime-targetTime)>0.08) current.item.currentTime=targetTime;
+          drawVideoCover(current.item);
+        }else{
+          drawCover(current.item,local,current.index);
+        }
         ctx.fillStyle='rgba(0,0,0,.55)';ctx.fillRect(0,1540,1080,380);
         ctx.fillStyle='#fff';ctx.font='bold 52px sans-serif';ctx.textAlign='center';
         const label=manifest.script_key === 'PODCAST_50' ? '팟캐스트 50초' : '팟캐스트';ctx.fillText(label,540,1650);

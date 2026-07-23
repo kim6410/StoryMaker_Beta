@@ -1,0 +1,8 @@
+# StoryMaker Beta web application runtime dependencies
+# Install with:
+#   F:\StoryMaker_beta\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+fastapi==0.139.2
+pydantic==2.13.3
+python-multipart==0.0.20
+uvicorn==0.51.0

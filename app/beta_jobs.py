@@ -21,6 +21,22 @@ BETA_JOBS = BETA_DATA / "jobs"
 BETA_DB = BETA_DATA / "storymaker_beta.db"
 BETA_FFMPEG = BETA_ROOT / "tools" / "ffmpeg.exe"
 
+BETA_INDUSTRY_LABELS = {
+    "general": "일반 서비스", "home_repair": "집수리", "boiler_facility": "보일러·설비",
+    "appliance_clean": "가전 청소", "general_cleaning": "청소업", "window_screen": "방충망",
+    "key_doorlock": "열쇠·도어락", "lighting_electric": "조명·전기", "drain_unclog": "하수구·배관",
+    "restaurant": "음식점", "meat_korean": "고기·한식", "bakery_dessert": "베이커리·디저트",
+    "pub_bar": "주점", "mealkit_sidedish": "밀키트·반찬", "cafe": "카페",
+    "workshop_class": "공방·클래스", "partyroom_studio": "파티룸·스튜디오",
+    "beauty_wellness": "뷰티·웰니스", "hair_salon": "미용실", "nail_art": "네일아트",
+    "skin_care": "피부관리", "fitness_pt": "피트니스·PT", "body_massage": "마사지",
+    "car_repair": "자동차 정비", "car_detailing": "자동차 디테일링", "car_rental": "렌터카",
+    "pet_beauty_hotel": "반려동물 미용·호텔", "veterinary_clinic": "동물병원", "flower_shop": "꽃집",
+    "kids_cafe": "키즈카페", "real_estate": "부동산", "education_academy": "교육·학원",
+    "study_cafe": "스터디카페", "professional_service": "전문 서비스", "moving_service": "이사 서비스",
+    "camping": "캠핑", "logistics": "물류·3PL",
+}
+
 beta_jobs_router = APIRouter(prefix="/beta-api", tags=["beta-jobs"])
 
 
@@ -217,7 +233,7 @@ beta_init()
 async def beta_create_job(
     business_name: str = Form(""), business_region: str = Form(""), business_service: str = Form(""),
     business_phone: str = Form(""), topic: str = Form(""), images: list[UploadFile] = File(...),
-    music: UploadFile | None = File(None),
+    videos: list[UploadFile] | None = File(None),
 ) -> JSONResponse:
     if not images:
         raise HTTPException(status_code=400, detail="이미지를 한 장 이상 선택하세요.")
@@ -235,21 +251,23 @@ async def beta_create_job(
         with target.open("wb") as stream:
             shutil.copyfileobj(upload.file, stream)
         saved_images.append(str(target))
-    music_path = None
-    if music and music.filename:
-        suffix = Path(music.filename).suffix.lower()
-        if suffix not in {".mp3", ".wav", ".m4a", ".aac"}:
-            raise HTTPException(status_code=400, detail="음악은 MP3, WAV, M4A, AAC만 지원합니다.")
-        music_target = input_dir / f"background_music{suffix}"
-        with music_target.open("wb") as stream:
-            shutil.copyfileobj(music.file, stream)
-        music_path = str(music_target)
+    saved_videos: list[str] = []
+    for index, upload in enumerate(videos or [], start=1):
+        if not upload.filename:
+            continue
+        suffix = Path(upload.filename).suffix.lower()
+        if suffix not in {".mp4", ".webm", ".mov"}:
+            raise HTTPException(status_code=400, detail=f"지원하지 않는 동영상 형식: {suffix}")
+        target = input_dir / f"video_{index:03d}{suffix}"
+        with target.open("wb") as stream:
+            shutil.copyfileobj(upload.file, stream)
+        saved_videos.append(str(target))
     business = {"name": business_name.strip(), "region": business_region.strip(), "service": business_service.strip(), "phone": business_phone.strip()}
     content = beta_make_content(business, topic, len(saved_images))
     created_at = beta_now()
     state = {"beta_job_id": beta_job_id, "title": content["title"], "status": "created", "progress": 0, "created_at": created_at}
     result = {**state, "schema_version": "beta-2.0", "business": business, "topic": topic.strip(), "content": content,
-              "assets": {"images": saved_images, "music": music_path, "script": str(job_dir / "script.txt"), "podcast_script": str(job_dir / "podcast_script.txt"), "channels_dir": str(job_dir / "channels"), "podcast_50": str(job_dir / "podcast_50.txt"), "podcast_80": str(job_dir / "podcast_80.txt"), "audio": None, "mixed_audio": None, "subtitle": None, "thumbnail": None, "video": None}}
+              "assets": {"images": saved_images, "videos": saved_videos, "music": None, "script": str(job_dir / "script.txt"), "podcast_script": str(job_dir / "podcast_script.txt"), "channels_dir": str(job_dir / "channels"), "podcast_50": str(job_dir / "podcast_50.txt"), "podcast_80": str(job_dir / "podcast_80.txt"), "audio": None, "mixed_audio": None, "subtitle": None, "thumbnail": None, "video": None}}
     beta_write_json(job_dir / "state.json", state)
     beta_write_json(job_dir / "result.json", result)
     channels_dir = job_dir / "channels"
@@ -366,7 +384,7 @@ def beta_v1_profile(request: Request) -> JSONResponse:
     profile = {
         "name": persona.get("company_name") or persona.get("business_name") or persona.get("name") or "",
         "region": persona.get("region") or persona.get("business_region") or persona.get("address") or "",
-        "service": persona.get("service") or persona.get("main_service") or persona.get("business_type") or persona.get("industry") or "",
+        "service": BETA_INDUSTRY_LABELS.get(str(persona.get("industry_key") or "").strip(), "") or persona.get("industry_name") or persona.get("business_type") or persona.get("industry") or "",
         "phone": persona.get("phone") or persona.get("phone_number") or persona.get("tel") or "",
     }
     return JSONResponse({"ok": True, "authenticated": True, "profile": profile})

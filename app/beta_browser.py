@@ -58,6 +58,7 @@ def beta_browser_manifest(beta_job_id: str) -> JSONResponse:
     job_dir = beta_browser_job_dir(beta_job_id)
     result = beta_browser_result(job_dir)
     images = result.get("assets", {}).get("images", [])
+    videos = result.get("assets", {}).get("videos", [])
     output = job_dir / "output"
     manifest = {
         "beta_job_id": beta_job_id,
@@ -68,6 +69,7 @@ def beta_browser_manifest(beta_job_id: str) -> JSONResponse:
         "script_key": "PODCAST_50",
         "script": result.get("content", {}).get("podcast_50") or result.get("content", {}).get("podcast_script") or result.get("content", {}).get("script", ""),
         "images": [f"/beta-api/browser/jobs/{beta_job_id}/image/{index}" for index in range(1, len(images) + 1)],
+        "videos": [f"/beta-api/browser/jobs/{beta_job_id}/video/{index}" for index in range(1, len(videos) + 1)],
         "voice_wav": f"/beta-api/browser/jobs/{beta_job_id}/voice-wav" if (output / "voice.wav").exists() else None,
         "music": f"/beta-api/browser/jobs/{beta_job_id}/music" if result.get("assets", {}).get("music") else None,
         "subtitle": f"/beta-api/browser/jobs/{beta_job_id}/subtitle" if (output / "subtitle.srt").exists() else None,
@@ -86,6 +88,19 @@ def beta_browser_image(beta_job_id: str, image_index: int) -> FileResponse:
     path = Path(images[image_index - 1])
     if not path.exists():
         raise HTTPException(status_code=404, detail="이미지 파일이 없습니다.")
+    return FileResponse(path)
+
+
+@beta_browser_router.get("/jobs/{beta_job_id}/video/{video_index}")
+def beta_browser_source_video(beta_job_id: str, video_index: int) -> FileResponse:
+    job_dir = beta_browser_job_dir(beta_job_id)
+    result = beta_browser_result(job_dir)
+    videos = result.get("assets", {}).get("videos", [])
+    if video_index < 1 or video_index > len(videos):
+        raise HTTPException(status_code=404, detail="동영상이 없습니다.")
+    path = Path(videos[video_index - 1])
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="동영상 파일이 없습니다.")
     return FileResponse(path)
 
 
