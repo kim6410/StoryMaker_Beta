@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StoryMaker Beta - Gemini Web Worker V2
 // @namespace    storymaker-beta-gemini-worker-v2
-// @version      2.1.0
+// @version      2.1.1
 // @description  StoryMaker Beta dedicated Gemini web worker
 // @match        https://gemini.google.com/*
 // @grant        GM_xmlhttpRequest
@@ -17,7 +17,7 @@
 
   const BACKEND = 'http://192.168.0.62:8021';
   const POLL_MS = 1500;
-  const VERSION = '2.1.0';
+  const VERSION = '2.1.1';
   const SINGLETON = '__STORYMAKER_BETA_GEMINI_WORKER_V2__';
   const ACTIVE_JOB_KEY = 'storymaker_beta_active_gemini_job_id';
 
@@ -70,37 +70,63 @@
     return [...new Set(out)];
   }
 
-  function promptBox() {
+  function isEditablePromptCandidate(el) {
+    if (!el) return false;
+    const tag = String(el.tagName || '').toUpperCase();
+    const editable = el.isContentEditable || el.getAttribute?.('contenteditable') === 'true';
+    const role = el.getAttribute?.('role') || '';
+    const multiline = el.getAttribute?.('aria-multiline') || '';
+    const disabled = el.disabled || el.getAttribute?.('aria-disabled') === 'true';
+    if (disabled) return false;
+    return editable || tag === 'TEXTAREA' || tag === 'INPUT' || role === 'textbox' || multiline === 'true';
+  }
+
+  function promptBoxCandidates() {
     const selectors = [
       'rich-textarea div[contenteditable="true"]',
+      'rich-textarea [contenteditable="true"]',
+      'rich-textarea textarea',
+      'rich-textarea',
       'div.ql-editor[contenteditable="true"]',
+      '[contenteditable="true"][aria-multiline="true"]',
+      '[role="textbox"][aria-multiline="true"]',
+      'div[contenteditable="true"][role="textbox"]',
+      'textarea[aria-label]',
+      'textarea[placeholder]',
       'div[aria-label*="프롬프트"]',
       'div[aria-label*="Enter a prompt"]',
       '[aria-label*="메시지"]',
       '[aria-label*="Gemini에게"]',
       '[data-placeholder*="Gemini"]',
-      'div[contenteditable="true"][role="textbox"]',
-      'div[role="textbox"]',
-      'rich-textarea textarea',
-      'rich-textarea [contenteditable="true"]',
+      '[data-placeholder*="prompt"]',
+      '[role="textbox"]',
       '[contenteditable="true"]',
       'textarea'
     ];
-    for (const selector of selectors) {
-      const found = queryAll(selector).find(isVisible);
-      if (found) return found;
-    }
-    return null;
+    const candidates = [...new Set(selectors.flatMap(queryAll))];
+    return candidates.map((el) => {
+      if (isEditablePromptCandidate(el)) return el;
+      return el.querySelector?.('[contenteditable="true"], textarea, [role="textbox"]') || null;
+    }).filter(Boolean);
   }
 
-  async function waitPromptBox(timeout = 15000) {
+  function promptBox() {
+    const candidates = promptBoxCandidates();
+    const visible = candidates.find((el) => isVisible(el) && isEditablePromptCandidate(el));
+    if (visible) return visible;
+    const mounted = candidates.find((el) => isEditablePromptCandidate(el) && el.isConnected);
+    return mounted || null;
+  }
+
+  async function waitPromptBox(timeout = 30000) {
     const started = Date.now();
     while (Date.now() - started < timeout) {
       const box = promptBox();
       if (box) return box;
       await sleep(500);
     }
-    return null;
+    const candidateCount = promptBoxCandidates().length;
+    throw new Error(`Gemini 입력창을 찾지 못했습니다. 후보 ${candidateCount}개`);
   }
 
   function injectText(el, text) {
