@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -27,6 +29,37 @@ def job_dir(job_id: str) -> Path:
 
 def read_result(p: Path) -> dict[str, Any]:
     return json.loads((p / "result.json").read_text(encoding="utf-8"))
+
+
+def srt_time(seconds: float) -> str:
+    ms = int(round(max(0.0, seconds) * 1000))
+    hours, ms = divmod(ms, 3_600_000)
+    minutes, ms = divmod(ms, 60_000)
+    secs, ms = divmod(ms, 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
+
+
+def probe_duration(path: Path) -> float:
+    completed = subprocess.run([str(FFMPEG), "-hide_banner", "-i", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", completed.stderr)
+    if not match:
+        raise RuntimeError("음성 길이를 확인하지 못했습니다.")
+    return int(match.group(1)) * 3600 + int(match.group(2)) * 60 + float(match.group(3))
+
+
+def write_srt(script: str, duration: float, target: Path) -> None:
+    sentences = [v.strip() for v in re.split(r"(?<=[.!?。])\s+|\n+", script) if v.strip()]
+    if not sentences:
+        sentences = [script.strip() or "StoryMaker Beta"]
+    weights = [max(len(v), 8) for v in sentences]
+    total = sum(weights)
+    cursor = 0.0
+    blocks = []
+    for index, (sentence, weight) in enumerate(zip(sentences, weights), start=1):
+        end = duration if index == len(sentences) else min(duration, cursor + duration * weight / total)
+        blocks.append(f"{index}\n{srt_time(cursor)} --> {srt_time(end)}\n{sentence}\n")
+        cursor = end
+    target.write_text("\n".join(blocks), encoding="utf-8")
 
 
 @beta_steps_router.get("/jobs/{job_id}/inspect")
@@ -77,9 +110,13 @@ def create_supertonic_voice(job_id: str) -> JSONResponse:
         raise HTTPException(status_code=502, detail="유효한 WAV가 아님")
     out = p / "output"; out.mkdir(exist_ok=True)
     wav = out / "voice.wav"; wav.write_bytes(audio)
-    import subprocess
     subprocess.run([str(FFMPEG),"-hide_banner","-loglevel","error","-y","-i",str(wav),"-c:a","libmp3lame","-q:a","3",str(out/"voice.mp3")], check=True)
+    duration = probe_duration(wav)
+    subtitle = out / "subtitle.srt"
+    write_srt(script, duration, subtitle)
     result.setdefault("assets", {})["audio"] = str(out / "voice.mp3")
+    result["assets"]["subtitle"] = str(subtitle)
+    result["duration_seconds"] = round(duration, 3)
     result["tts"] = {"engine":"beta-supertonic","port":7790,"voice":"F1"}
     (p / "result.json").write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
-    return JSONResponse({"ok":True,"wav_bytes":len(audio),"mp3":str(out/"voice.mp3")})
+    return JSONResponse({"ok":True,"wav_bytes":len(audio),"mp3":str(out/"voice.mp3"),"subtitle":str(subtitle),"duration_seconds":round(duration,3)})

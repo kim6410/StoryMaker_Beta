@@ -70,6 +70,8 @@ def beta_browser_manifest(beta_job_id: str) -> JSONResponse:
         "images": [f"/beta-api/browser/jobs/{beta_job_id}/image/{index}" for index in range(1, len(images) + 1)],
         "voice_wav": f"/beta-api/browser/jobs/{beta_job_id}/voice-wav" if (output / "voice.wav").exists() else None,
         "music": f"/beta-api/browser/jobs/{beta_job_id}/music" if result.get("assets", {}).get("music") else None,
+        "subtitle": f"/beta-api/browser/jobs/{beta_job_id}/subtitle" if (output / "subtitle.srt").exists() else None,
+        "music_volume": 0.10,
     }
     return JSONResponse({"ok": True, "manifest": manifest})
 
@@ -93,6 +95,14 @@ def beta_browser_voice_wav(beta_job_id: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(status_code=404, detail="브라우저 인코딩용 WAV가 없습니다. 먼저 대본 음성을 준비하세요.")
     return FileResponse(path, media_type="audio/wav")
+
+
+@beta_browser_router.get("/jobs/{beta_job_id}/subtitle")
+def beta_browser_subtitle(beta_job_id: str) -> FileResponse:
+    path = beta_browser_job_dir(beta_job_id) / "output" / "subtitle.srt"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="SRT 자막이 없습니다. 먼저 음성을 준비하세요.")
+    return FileResponse(path, media_type="application/x-subrip")
 
 
 @beta_browser_router.get("/jobs/{beta_job_id}/music")
