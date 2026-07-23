@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Beta 브라우저 렌더러</title>
+<style>
+body{margin:0;background:#07101f;color:#eef6ff;font-family:Arial,sans-serif}.wrap{max-width:920px;margin:auto;padding:24px}.card{background:#0e1a30;border:1px solid #294065;border-radius:18px;padding:20px;margin-bottom:16px}input,button{padding:12px;border-radius:10px;border:1px solid #38527d;background:#081326;color:#fff}input{width:100%}button{background:#176be0;font-weight:800;cursor:pointer;margin-right:8px}.row{display:grid;grid-template-columns:1fr auto;gap:10px}.ok{color:#74efc2}.bad{color:#ff9b9b}pre{white-space:pre-wrap;word-break:break-all;background:#07101f;padding:14px;border-radius:12px}video,audio{width:100%;margin-top:12px}canvas{width:270px;height:480px;background:#000;display:block;margin:12px auto}
+</style>
+</head>
+<body><main class="wrap">
+<section class="card"><h1>Beta 브라우저 MP3·MP4 렌더러</h1><p>서버는 작업 데이터와 WAV·이미지만 제공합니다. MP3 인코딩과 MP4 렌더링은 이 브라우저가 수행합니다.</p>
+<div class="row"><input id="job" placeholder="beta_... 작업 ID"><button id="load">작업 불러오기</button></div></section>
+<section class="card"><h2>사용자 자원 진단</h2><pre id="diag"></pre></section>
+<section class="card"><h2>브라우저 제작</h2><button id="mp3" disabled>브라우저 MP3 생성</button><button id="mp4" disabled>브라우저 MP4 생성</button><button id="upload" disabled>Beta 보관함 저장</button><p id="status">작업을 불러오세요.</p><canvas id="canvas" width="1080" height="1920"></canvas><audio id="audio" controls hidden></audio><video id="video" controls hidden></video></section>
+</main><script src="/beta-static/vendor/WasmMediaEncoder.min.js"></script><script src="/beta-static/beta-browser-render.js?v=20260724-2"></script></body></html>

@@ -1,0 +1,55 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+data/jobs/
+data/chrome-debug/
+data/chrome-test/
+data/*.db
+data/*.db-*
+data/beta_gemini_worker_state.json
+data/*.png
+
+# Generated media
+*.mp3
+*.wav
+*.m4a
+*.aac
+*.mp4
+*.srt
+*.webm
+
+# Models and local engines
+Supertonic3/
+tools/*.exe
+model_cache/
+
+# Logs and temp
+logs/
+patch_*.py
+fix_*.py
+*.log
+*.tmp
+*.bak
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# OS and editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

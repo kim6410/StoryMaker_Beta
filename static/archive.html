@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>보관함 Beta</title>
+<style>
+:root{font-family:Arial,sans-serif;color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#07101f;color:#eef6ff}.top{display:flex;justify-content:space-between;align-items:center;padding:16px 24px;background:#0c1729;border-bottom:1px solid #253655}.wrap{max-width:980px;margin:auto;padding:24px}.panel,.item{background:#0e1a30;border:1px solid #263a5e;border-radius:18px;padding:22px}.item{margin-top:14px}.muted{color:#9cb0cc}.meta{font-family:monospace;color:#75edce;word-break:break-all}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}a{display:inline-block;background:#172844;color:#dcecff;border-radius:10px;padding:10px 14px;text-decoration:none;font-weight:800}.empty{padding:34px;text-align:center;color:#9cb0cc}
+</style>
+</head>
+<body>
+<header class="top"><strong>보관함 Beta</strong><a href="/beta/production">딸깍 Beta</a></header>
+<main class="wrap"><section class="panel"><h1>Beta 전용 보관함</h1><p class="muted">V1 보관함과 분리된 Beta 결과만 표시합니다.</p><div id="beta-archive-list" class="empty">불러오는 중...</div></section></main>
+<script>
+(async()=>{const list=document.getElementById('beta-archive-list');try{const r=await fetch('/beta-api/jobs',{cache:'no-store'});const d=await r.json();if(!d.items?.length){list.textContent='Beta 제작 결과가 아직 없습니다.';return;}list.className='';list.innerHTML=d.items.map(x=>`<article class="item"><h3>${x.title||'Beta 제작'}</h3><div class="meta">${x.beta_job_id}</div><p>상태: ${x.status} · 진행률: ${x.progress}%</p><div class="actions">${x.status==='completed'?`<a href="/beta-api/jobs/${encodeURIComponent(x.beta_job_id)}/file/video" target="_blank">MP4 보기</a><a href="/beta-api/jobs/${encodeURIComponent(x.beta_job_id)}/file/thumbnail" target="_blank">썸네일 보기</a><a href="/beta-api/jobs/${encodeURIComponent(x.beta_job_id)}/file/audio" target="_blank">MP3 듣기</a>`:''}</div></article>`).join('');}catch(e){list.textContent='보관함 조회 실패: '+e.message;}})();
+</script>
+</body>
+</html>
