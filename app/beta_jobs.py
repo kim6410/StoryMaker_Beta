@@ -338,6 +338,45 @@ def beta_get_job(beta_job_id: str) -> JSONResponse:
     return JSONResponse({"ok": True, "job": beta_read_json(beta_job_dir(beta_job_id) / "result.json")})
 
 
+@beta_jobs_router.delete("/jobs/{beta_job_id}")
+def beta_delete_job(beta_job_id: str) -> JSONResponse:
+    job_dir = beta_job_dir(beta_job_id).resolve()
+    jobs_root = BETA_JOBS.resolve()
+    if job_dir.parent != jobs_root or not job_dir.name.startswith("beta_"):
+        raise HTTPException(status_code=400, detail="삭제할 수 없는 작업 경로입니다.")
+
+    with beta_connect() as connection:
+        row = connection.execute(
+            "SELECT beta_job_id FROM beta_jobs WHERE beta_job_id=?",
+            (beta_job_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Beta 작업 DB 레코드를 찾을 수 없습니다.")
+
+    quarantine = jobs_root / f".__deleting__{beta_job_id}"
+    if quarantine.exists():
+        shutil.rmtree(quarantine)
+    job_dir.replace(quarantine)
+
+    try:
+        with beta_connect() as connection:
+            connection.execute("DELETE FROM beta_jobs WHERE beta_job_id=?", (beta_job_id,))
+            connection.commit()
+        shutil.rmtree(quarantine)
+    except Exception as exc:
+        if quarantine.exists() and not job_dir.exists():
+            quarantine.replace(job_dir)
+        raise HTTPException(status_code=500, detail=f"Beta 작업 완전 삭제 실패: {exc}")
+
+    leftovers = [
+        str(path) for path in jobs_root.iterdir()
+        if beta_job_id in path.name
+    ]
+    if leftovers:
+        raise HTTPException(status_code=500, detail="삭제 후 잔여 파일이 발견되었습니다.")
+    return JSONResponse({"ok": True, "deleted": beta_job_id, "db_deleted": True, "files_deleted": True})
+
+
 @beta_jobs_router.get("/jobs/{beta_job_id}/file/{asset_name}")
 def beta_get_asset(beta_job_id: str, asset_name: str) -> FileResponse:
     result = beta_read_json(beta_job_dir(beta_job_id) / "result.json")
