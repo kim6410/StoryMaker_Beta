@@ -78,8 +78,8 @@ def beta_build_prompt(payload: BetaGeminiRequest) -> str:
 4. INSTAGRAM: 인스타그램 피드용. 모바일 가독성이 좋은 짧은 문단과 해시태그를 포함합니다.
 5. CARROT: 당근 비즈프로필용. 이웃에게 말하듯 생활 불편과 해결 내용을 친근하게 작성합니다.
 6. CAROUSEL_7: 카드뉴스 7장용. 각 장을 1장부터 7장까지 제목과 짧은 설명으로 구성합니다.
-7. PODCAST_50: 약 50초 분량의 자연스러운 한국어 음성 대본입니다.
-8. PODCAST_80: 약 80초 분량의 자연스러운 한국어 음성 대본입니다. Beta TTS·SRT·MP4의 기본 대본으로 사용됩니다.
+7. PODCAST_50: 약 50초 분량의 자연스러운 한국어 음성 대본입니다. Beta TTS·WASM MP3·WebGPU MP4의 기본 대본으로 사용됩니다.
+8. PODCAST_80: 약 80초 분량의 자연스러운 한국어 음성 대본입니다. 긴 버전 선택지로 보관합니다.
 
 ## 공통 작성 원칙
 - 각 채널은 복사본이 아니라 플랫폼 용도에 맞게 다시 작성합니다.
@@ -160,8 +160,8 @@ def beta_parse_content(text: str, image_count: int) -> dict[str, Any]:
         "channel_order": CHANNEL_KEYS,
         "podcast_50": podcast_50,
         "podcast_80": podcast_80,
-        "podcast_script": podcast_80,
-        "script": podcast_80,
+        "podcast_script": podcast_50,
+        "script": podcast_50,
         "provider": "gemini",
         "model": beta_gemini_model(),
     }
@@ -228,7 +228,7 @@ def beta_gemini_generate_for_job(beta_job_id: str) -> dict[str, Any]:
         (channels_dir / f"{key}.txt").write_text(content["channels"][key]["content"] + "\n", encoding="utf-8")
     (job_dir / "podcast_50.txt").write_text(content["podcast_50"], encoding="utf-8")
     (job_dir / "podcast_80.txt").write_text(content["podcast_80"], encoding="utf-8")
-    script = content["podcast_80"]
+    script = content["podcast_50"]
     (job_dir / "script.txt").write_text(script, encoding="utf-8")
     (job_dir / "podcast_script.txt").write_text(script, encoding="utf-8")
     tmp = result_path.with_suffix(".json.tmp")

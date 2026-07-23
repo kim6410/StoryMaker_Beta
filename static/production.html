@@ -28,11 +28,12 @@
 <div class="actions"><button type="submit">1. 콘텐츠와 작업 생성</button><button id="beta-gemini" type="button" disabled>2. Gemini SNS 8채널 작성</button><button id="beta-render" type="button" disabled>3. 백엔드 음성 준비</button><a id="beta-browser-link" href="/beta/browser-render">4. 브라우저 MP3·MP4 제작</a></div>
 </form>
 </section>
-<section class="card"><div class="step">업체정보 → Gemini SNS 8채널 분리 → PODCAST_80 기본 대본 → Beta Supertonic 음성 → 브라우저 MP3 → 브라우저 MP4 → 보관함 저장</div>
+<section class="card"><div class="step">업체정보 → Gemini SNS 8채널 분리 → PODCAST_50 기본 대본 → Beta Supertonic 음성 → WASM MP3 → WebGPU MP4 → 보관함 저장</div>
 <div class="actions"><button id="beta-check-job" type="button" disabled>중간확인 1 · 작업/SNS 8채널</button><button id="beta-check-gemini" type="button" disabled>중간확인 2 · Gemini</button><button id="beta-supertonic" type="button" disabled>중간확인 3 · Supertonic 음성</button><button id="beta-check-assets" type="button" disabled>중간확인 4 · MP3/SRT/MP4</button></div><pre id="beta-debug" class="result">중간 확인 결과가 여기에 표시됩니다.</pre>
 <div>현재 작업 ID</div><div id="beta-job-id" class="job">아직 생성되지 않음</div><p id="beta-status">업체정보와 이미지를 입력해 시작하세요.</p><progress id="beta-progress" max="100" value="0"></progress></section>
 <section class="card"><div class="badge">SNS 8 CHANNELS</div><h2>SNS 채널별 입력자료</h2><p class="muted">Gemini 결과를 블로그·플레이스·구글·인스타·당근·카드뉴스·팟캐스트50s·팟캐스트80s로 분리해 저장합니다.</p><div id="beta-slot-tabs" class="slot-tabs"><button type="button" class="slot-tab active" disabled>채널 대기</button></div><div id="beta-slots" class="slot-panel"><div class="slot-empty">Gemini SNS 8채널 작성이 완료되면 이곳에 결과가 표시됩니다.</div></div></section>
+<section id="beta-render-handoff" class="card" hidden><div class="badge">NEXT · WASM + WEBGPU</div><h2>팟캐스트50s로 MP3·MP4 제작</h2><p class="muted">Gemini의 PODCAST_50 대본과 현재 작업 이미지를 그대로 넘깁니다. MP3는 WASM, 영상 프레임은 WebGPU를 우선 사용합니다.</p><div class="grid"><div class="result" style="margin-top:0"><strong>기본 대본</strong><br>PODCAST_50</div><div class="result" style="margin-top:0"><strong>렌더 엔진</strong><br>WASM MP3 · WebGPU MP4</div></div><div class="actions"><button id="beta-prepare-browser" type="button">3. PODCAST_50 음성 준비</button><a id="beta-open-browser" href="/beta/browser-render">4. WASM·WebGPU 제작 화면 열기</a></div></section>
 <section class="card"><div class="badge">CONTENT & PODCAST</div><div id="beta-content" class="result" hidden></div><audio id="beta-audio" controls hidden style="width:100%;margin-top:14px"></audio><video id="beta-preview" controls hidden></video></section>
 </main>
-<script src="/beta-static/beta-production.js?v=20260724-beta-sns8-1"></script>
+<script src="/beta-static/beta-production.js?v=20260724-podcast50-webgpu-1"></script>
 </body></html>

@@ -262,8 +262,8 @@ async def beta_create_job(
     (job_dir / "content.txt").write_text("\n\n".join(content_lines), encoding="utf-8")
     (job_dir / "podcast_50.txt").write_text(content["podcast_50"], encoding="utf-8")
     (job_dir / "podcast_80.txt").write_text(content["podcast_80"], encoding="utf-8")
-    (job_dir / "script.txt").write_text(content["podcast_80"], encoding="utf-8")
-    (job_dir / "podcast_script.txt").write_text(content["podcast_80"], encoding="utf-8")
+    (job_dir / "script.txt").write_text(content["podcast_50"], encoding="utf-8")
+    (job_dir / "podcast_script.txt").write_text(content["podcast_50"], encoding="utf-8")
     with beta_connect() as connection:
         connection.execute("INSERT INTO beta_jobs(beta_job_id,title,status,progress,created_at,result_json) VALUES(?,?,?,?,?,?)",
                            (beta_job_id, content["title"], "created", 0, created_at, str(job_dir / "result.json")))

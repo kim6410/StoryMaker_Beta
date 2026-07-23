@@ -25,7 +25,11 @@
     checkGemini: document.getElementById('beta-check-gemini'),
     supertonic: document.getElementById('beta-supertonic'),
     checkAssets: document.getElementById('beta-check-assets'),
-    debug: document.getElementById('beta-debug')
+    debug: document.getElementById('beta-debug'),
+    renderHandoff: document.getElementById('beta-render-handoff'),
+    prepareBrowser: document.getElementById('beta-prepare-browser'),
+    openBrowser: document.getElementById('beta-open-browser'),
+    browserLink: document.getElementById('beta-browser-link')
   };
 
   let betaCurrentJobId = sessionStorage.getItem('storymaker_beta_current_job') || '';
@@ -68,6 +72,13 @@
     const content = job.content || {};
     const channels = content.channels || {};
     const order = Array.isArray(content.channel_order) ? content.channel_order : [];
+    const readyForRender = order.length === 8 && Boolean(content.podcast_50 || channels.PODCAST_50?.content);
+    if (betaUi.renderHandoff) betaUi.renderHandoff.hidden = !readyForRender;
+    if (readyForRender && betaCurrentJobId) {
+      const url = `/beta/browser-render?job=${encodeURIComponent(betaCurrentJobId)}`;
+      if (betaUi.openBrowser) betaUi.openBrowser.href = url;
+      if (betaUi.browserLink) betaUi.browserLink.href = url;
+    }
     if (order.length === 8) {
       betaUi.slotTabs.innerHTML = order.map((key, index) => {
         const item = channels[key] || {};
@@ -206,6 +217,7 @@ ${content.podcast_80 || content.podcast_script || content.script || ''}`;
   betaUi.checkJob.addEventListener('click', () => betaInspect('작업/SNS 8채널 확인'));
   betaUi.checkGemini.addEventListener('click', () => betaInspect('Gemini 반영 확인'));
   betaUi.supertonic.addEventListener('click', betaCreateSupertonicVoice);
+  if (betaUi.prepareBrowser) betaUi.prepareBrowser.addEventListener('click', betaCreateSupertonicVoice);
   betaUi.checkAssets.addEventListener('click', () => betaInspect('MP3/SRT/MP4 확인'));
   async function betaRestoreCurrentJob() {
     if (!betaCurrentJobId) return;

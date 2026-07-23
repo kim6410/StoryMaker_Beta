@@ -4,6 +4,83 @@
   const ui = { job:$('job'), load:$('load'), mp3:$('mp3'), mp4:$('mp4'), upload:$('upload'), diag:$('diag'), status:$('status'), canvas:$('canvas'), audio:$('audio'), video:$('video') };
   const ctx = ui.canvas.getContext('2d');
   let manifest = null, mp3Blob = null, mp4Blob = null;
+  const gpu = { ready:false, canvas:null, context:null, device:null, pipeline:null, sampler:null, uniformBuffer:null, textures:[] };
+
+  async function initWebGPU() {
+    if (!navigator.gpu) return false;
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) return false;
+    const device = await adapter.requestDevice();
+    const canvas = document.createElement('canvas');
+    canvas.width = ui.canvas.width;
+    canvas.height = ui.canvas.height;
+    const context = canvas.getContext('webgpu');
+    if (!context) return false;
+    const format = navigator.gpu.getPreferredCanvasFormat();
+    context.configure({ device, format, alphaMode:'opaque' });
+    const shader = device.createShaderModule({ code: `
+      struct Params { cropX:f32, cropY:f32, zoom:f32, pad:f32 };
+      @group(0) @binding(0) var imageSampler: sampler;
+      @group(0) @binding(1) var imageTexture: texture_2d<f32>;
+      @group(0) @binding(2) var<uniform> params: Params;
+      struct Out { @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32> };
+      @vertex fn vs(@builtin(vertex_index) i:u32) -> Out {
+        var pos=array<vec2<f32>,6>(vec2(-1.0,-1.0),vec2(1.0,-1.0),vec2(-1.0,1.0),vec2(-1.0,1.0),vec2(1.0,-1.0),vec2(1.0,1.0));
+        var uv=array<vec2<f32>,6>(vec2(0.0,1.0),vec2(1.0,1.0),vec2(0.0,0.0),vec2(0.0,0.0),vec2(1.0,1.0),vec2(1.0,0.0));
+        var out:Out; out.position=vec4(pos[i],0.0,1.0); out.uv=uv[i]; return out;
+      }
+      @fragment fn fs(input:Out) -> @location(0) vec4<f32> {
+        let centered=(input.uv-vec2(0.5))*vec2(params.cropX,params.cropY)/params.zoom+vec2(0.5);
+        return textureSample(imageTexture,imageSampler,clamp(centered,vec2(0.001),vec2(0.999)));
+      }` });
+    const pipeline = device.createRenderPipeline({
+      layout:'auto',
+      vertex:{ module:shader, entryPoint:'vs' },
+      fragment:{ module:shader, entryPoint:'fs', targets:[{format}] },
+      primitive:{ topology:'triangle-list' }
+    });
+    gpu.ready=true; gpu.canvas=canvas; gpu.context=context; gpu.device=device; gpu.pipeline=pipeline;
+    gpu.sampler=device.createSampler({ magFilter:'linear', minFilter:'linear' });
+    gpu.uniformBuffer=device.createBuffer({ size:16, usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST });
+    return true;
+  }
+
+  async function prepareGpuTextures(images) {
+    if (!gpu.ready) return;
+    gpu.textures = [];
+    for (const image of images) {
+      const bitmap = await createImageBitmap(image);
+      const texture = gpu.device.createTexture({
+        size:[bitmap.width, bitmap.height, 1], format:'rgba8unorm',
+        usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST|GPUTextureUsage.RENDER_ATTACHMENT
+      });
+      gpu.device.queue.copyExternalImageToTexture({source:bitmap},{texture},[bitmap.width,bitmap.height]);
+      const targetAspect=ui.canvas.width/ui.canvas.height, imageAspect=bitmap.width/bitmap.height;
+      const cropX=imageAspect>targetAspect ? targetAspect/imageAspect : 1;
+      const cropY=imageAspect<targetAspect ? imageAspect/targetAspect : 1;
+      const bindGroup=gpu.device.createBindGroup({
+        layout:gpu.pipeline.getBindGroupLayout(0),
+        entries:[
+          {binding:0,resource:gpu.sampler},
+          {binding:1,resource:texture.createView()},
+          {binding:2,resource:{buffer:gpu.uniformBuffer}}
+        ]
+      });
+      gpu.textures.push({texture,bindGroup,cropX,cropY});
+    }
+  }
+
+  function drawGpuCover(index, progress=0) {
+    const item=gpu.textures[index];
+    if (!gpu.ready || !item) return false;
+    gpu.device.queue.writeBuffer(gpu.uniformBuffer,0,new Float32Array([item.cropX,item.cropY,1+progress*0.05,0]));
+    const encoder=gpu.device.createCommandEncoder();
+    const pass=encoder.beginRenderPass({colorAttachments:[{view:gpu.context.getCurrentTexture().createView(),clearValue:{r:0,g:0,b:0,a:1},loadOp:'clear',storeOp:'store'}]});
+    pass.setPipeline(gpu.pipeline); pass.setBindGroup(0,item.bindGroup); pass.draw(6); pass.end();
+    gpu.device.queue.submit([encoder.finish()]);
+    ctx.drawImage(gpu.canvas,0,0,ui.canvas.width,ui.canvas.height);
+    return true;
+  }
 
   function diagnostics() {
     const mp4Types = [
@@ -15,6 +92,7 @@
     return {
       secureContext: window.isSecureContext,
       webgpu: !!navigator.gpu,
+      webgpuActive: gpu.ready,
       wasm: typeof WebAssembly === 'object',
       videoEncoder: 'VideoEncoder' in window,
       audioEncoder: 'AudioEncoder' in window,
@@ -46,7 +124,8 @@
     return image;
   }
 
-  function drawCover(image, progress=0) {
+  function drawCover(image, progress=0, index=0) {
+    if (drawGpuCover(index, progress)) return;
     const cw=ui.canvas.width, ch=ui.canvas.height;
     const scale=Math.max(cw/image.naturalWidth, ch/image.naturalHeight) * (1 + progress*0.05);
     const w=image.naturalWidth*scale, h=image.naturalHeight*scale;
@@ -62,7 +141,7 @@
     manifest=data.manifest;
     if (!manifest.voice_wav) throw new Error('먼저 백엔드 음성 준비를 실행해 voice.wav를 생성하세요.');
     ui.mp3.disabled=false; ui.mp4.disabled=false;
-    ui.status.textContent=`작업 준비 완료 · 슬롯 ${manifest.slots.length}개 · 이미지 ${manifest.images.length}장`;
+    ui.status.textContent=`작업 준비 완료 · 기본 대본 ${manifest.script_key || 'PODCAST_50'} · 이미지 ${manifest.images.length}장`;
   }
 
   function parseWav(buffer) {
@@ -110,6 +189,8 @@
     const d=refreshDiag();
     if(!d.mp4MimeType) throw new Error('이 브라우저는 MP4 MediaRecorder를 지원하지 않습니다.');
     const images=await Promise.all(manifest.images.map(loadImage));
+    if (!gpu.ready) await initWebGPU().catch(()=>false);
+    await prepareGpuTextures(images).catch(()=>{});
     const wavBuffer=await fetch(manifest.voice_wav).then(r=>r.arrayBuffer());
     const audioContext=new AudioContext();
     const audioBuffer=await audioContext.decodeAudioData(wavBuffer.slice(0));
@@ -124,10 +205,10 @@
     await new Promise(resolve=>{
       function frame(now){
         const t=(now-started)/1000, p=Math.min(1,t/duration), slot=Math.min(images.length-1,Math.floor(p*images.length));
-        const local=(p*images.length)-slot; drawCover(images[slot],local);
+        const local=(p*images.length)-slot; drawCover(images[slot],local,slot);
         ctx.fillStyle='rgba(0,0,0,.55)';ctx.fillRect(0,1540,1080,380);
         ctx.fillStyle='#fff';ctx.font='bold 52px sans-serif';ctx.textAlign='center';
-        const label=manifest.slots[slot]?.name || `슬롯 ${slot+1}`;ctx.fillText(label,540,1650);
+        const label=manifest.script_key === 'PODCAST_50' ? '팟캐스트 50초' : '팟캐스트';ctx.fillText(label,540,1650);
         if(t<duration) requestAnimationFrame(frame); else resolve();
       } requestAnimationFrame(frame);
     });
@@ -151,6 +232,8 @@
   ui.mp3.onclick=()=>encodeMp3().catch(e=>ui.status.textContent=`MP3 실패: ${e.message}`);
   ui.mp4.onclick=()=>renderMp4().catch(e=>ui.status.textContent=`MP4 실패: ${e.message}`);
   ui.upload.onclick=()=>upload().catch(e=>ui.status.textContent=`저장 실패: ${e.message}`);
-  const saved=sessionStorage.getItem('storymaker_beta_current_job'); if(saved) ui.job.value=saved;
-  refreshDiag();
+  const params=new URLSearchParams(location.search);
+  const saved=params.get('job') || sessionStorage.getItem('storymaker_beta_current_job');
+  if(saved){ ui.job.value=saved; setTimeout(()=>loadJob().catch(e=>ui.status.textContent=`불러오기 실패: ${e.message}`),200); }
+  initWebGPU().finally(refreshDiag);
 })();
