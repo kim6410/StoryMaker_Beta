@@ -106,7 +106,12 @@
     list.querySelectorAll('[data-delete-job]').forEach((button) => button.addEventListener('click', () => {
       list.querySelectorAll('.delete-confirm').forEach((box) => { if (box.dataset.confirmFor !== button.dataset.deleteJob) box.hidden = true; });
       const box = list.querySelector(`[data-confirm-for="${CSS.escape(button.dataset.deleteJob)}"]`);
-      if (box) box.hidden = !box.hidden;
+      if (!box) return;
+      box.hidden = !box.hidden;
+      if (!box.hidden) {
+        const yesButton = box.querySelector('[data-delete-yes]');
+        requestAnimationFrame(() => yesButton?.focus({ preventScroll: true }));
+      }
     }));
     list.querySelectorAll('[data-delete-no]').forEach((button) => button.addEventListener('click', () => {
       const box = button.closest('.delete-confirm'); if (box) box.hidden = true;
