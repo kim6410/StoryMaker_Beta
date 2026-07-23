@@ -89,25 +89,40 @@ def beta_build_prompt(payload: BetaGeminiRequest) -> str:
 - PODCAST_50과 PODCAST_80은 분량과 내용 밀도가 분명히 달라야 합니다.
 
 ## 출력 형식
-반드시 유효한 JSON 하나만 반환하세요. 코드펜스와 설명 문구를 추가하지 마세요.
-정확히 아래 8개 키를 channels 객체에 모두 포함하세요.
+긴 본문을 JSON 문자열에 넣지 마세요. 아래 BLOCK 형식으로만 반환하세요.
+코드펜스, 설명, 머리말, 꼬리말을 추가하지 마세요.
 
-{{
-  "title": "전체 프로젝트 제목",
-  "description": "전체 콘텐츠 설명",
-  "channels": {{
-    "BLOG": "추천 제목 5개와 블로그 본문 전체",
-    "NAVER_PLACE": "네이버 플레이스 새소식 전체",
-    "GOOGLE_BUSINESS": "구글 비즈니스 게시물 전체",
-    "INSTAGRAM": "인스타그램 게시물 전체",
-    "CARROT": "당근 비즈프로필 게시물 전체",
-    "CAROUSEL_7": "1장부터 7장까지 카드뉴스 문안 전체",
-    "PODCAST_50": "약 50초 팟캐스트 대본",
-    "PODCAST_80": "약 80초 팟캐스트 대본"
-  }}
-}}
+[BLOCK:TITLE]
+전체 프로젝트 제목
 
-출력 전에 8개 키 누락 여부와 JSON 파싱 가능 여부를 내부적으로 확인하세요.
+[BLOCK:DESCRIPTION]
+전체 콘텐츠 설명
+
+[BLOCK:BLOG]
+추천 제목 5개와 블로그 본문 전체
+
+[BLOCK:NAVER_PLACE]
+네이버 플레이스 새소식 전체
+
+[BLOCK:GOOGLE_BUSINESS]
+구글 비즈니스 게시물 전체
+
+[BLOCK:INSTAGRAM]
+인스타그램 게시물 전체
+
+[BLOCK:CARROT]
+당근 비즈프로필 게시물 전체
+
+[BLOCK:CAROUSEL_7]
+1장부터 7장까지 카드뉴스 문안 전체
+
+[BLOCK:PODCAST_50]
+약 50초 팟캐스트 대본
+
+[BLOCK:PODCAST_80]
+약 80초 팟캐스트 대본
+
+출력 전에 8개 콘텐츠 BLOCK 누락 여부를 내부적으로 확인하세요.
 """
 
 
@@ -137,8 +152,35 @@ def beta_extract_json_object(text: str) -> dict[str, Any]:
     raise ValueError("Gemini 응답에서 유효한 SNS 8채널 JSON을 찾지 못했습니다.")
 
 
+
+
+def beta_extract_blocks(text: str) -> dict[str, Any]:
+    cleaned = re.sub(r"```(?:text|markdown|json)?", "", str(text or ""), flags=re.I).replace("```", "").strip()
+    names = ["TITLE", "DESCRIPTION", *CHANNEL_KEYS]
+    found: dict[str, str] = {}
+    for index, name in enumerate(names):
+        start_tag = f"[BLOCK:{name}]"
+        start = cleaned.find(start_tag)
+        if start < 0:
+            continue
+        body_start = start + len(start_tag)
+        next_positions = [cleaned.find(f"[BLOCK:{other}]", body_start) for other in names[index + 1:]]
+        next_positions = [pos for pos in next_positions if pos >= 0]
+        end = min(next_positions) if next_positions else len(cleaned)
+        found[name] = cleaned[body_start:end].strip()
+    if all(found.get(key) for key in CHANNEL_KEYS):
+        return {
+            "title": found.get("TITLE", "").strip(),
+            "description": found.get("DESCRIPTION", "").strip(),
+            "channels": {key: found[key] for key in CHANNEL_KEYS},
+        }
+    raise ValueError("Gemini 응답에서 SNS 8채널 BLOCK을 찾지 못했습니다.")
+
 def beta_parse_content(text: str, image_count: int) -> dict[str, Any]:
-    data = beta_extract_json_object(text)
+    try:
+        data = beta_extract_json_object(text)
+    except ValueError:
+        data = beta_extract_blocks(text)
     raw_channels = data.get("channels")
     if not isinstance(raw_channels, dict):
         raise ValueError("Gemini 결과에 channels 객체가 필요합니다.")

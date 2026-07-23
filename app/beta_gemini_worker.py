@@ -16,7 +16,7 @@ ROOT = Path(r"F:\StoryMaker_beta")
 JOBS_DIR = ROOT / "data" / "jobs"
 STATE_PATH = ROOT / "data" / "beta_gemini_worker_state.json"
 LOCK = threading.Lock()
-REQUIRED_WORKER_ID = "tampermonkey-beta-v2-2.1.1"
+REQUIRED_WORKER_ID = "tampermonkey-beta-v2-2.1.2"
 
 beta_gemini_worker_router = APIRouter(prefix="/beta-api/gemini-worker", tags=["beta-gemini-worker"])
 
