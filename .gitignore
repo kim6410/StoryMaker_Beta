@@ -53,3 +53,6 @@ fix_*.py
 Thumbs.db
 .vscode/
 .idea/
+ 
+# Local safety backups 
+backups/
