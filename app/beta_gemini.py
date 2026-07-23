@@ -78,14 +78,17 @@ def beta_build_prompt(payload: BetaGeminiRequest) -> str:
 4. INSTAGRAM: 인스타그램 피드용. 모바일 가독성이 좋은 짧은 문단과 해시태그를 포함합니다.
 5. CARROT: 당근 비즈프로필용. 이웃에게 말하듯 생활 불편과 해결 내용을 친근하게 작성합니다.
 6. CAROUSEL_7: 카드뉴스 7장용. 각 장을 1장부터 7장까지 제목과 짧은 설명으로 구성합니다.
-7. PODCAST_50: 약 50초 분량의 자연스러운 한국어 음성 대본입니다. Beta TTS·WASM MP3·WebGPU MP4의 기본 대본으로 사용됩니다.
-8. PODCAST_80: 약 80초 분량의 자연스러운 한국어 음성 대본입니다. 긴 버전 선택지로 보관합니다.
+7. PODCAST_50: 약 50초 분량의 여자·남자 대화형 한국어 음성 대본입니다. 첫 줄은 반드시 "여자:", 둘째 줄은 반드시 "남자:"로 시작하고 이후에도 한 줄씩 번갈아 대화합니다. Beta TTS·WASM MP3·WebGPU MP4의 기본 대본으로 사용됩니다.
+8. PODCAST_80: 약 80초 분량의 여자·남자 대화형 한국어 음성 대본입니다. 첫 줄은 여자, 둘째 줄은 남자로 시작해 한 줄씩 번갈아 대화합니다. 긴 버전 선택지로 보관합니다.
+9. THUMBNAIL_PROMPT: 제공된 업체정보·인스타 문안·현장 내용을 바탕으로 9:16 세로형 썸네일을 만들 수 있는 상세 이미지 생성 프롬프트입니다. 사진에 없는 사실은 만들지 말고 업체명, 핵심 짧은 문구, 전화번호의 배치와 디자인 방향을 명확히 작성합니다.
 
 ## 공통 작성 원칙
 - 각 채널은 복사본이 아니라 플랫폼 용도에 맞게 다시 작성합니다.
 - 과장, 허위 후기, 최저가, 최고, 완벽, 100퍼센트 해결 같은 검증 불가능한 표현을 금지합니다.
 - 전화번호는 필요한 채널의 마지막 상담 문구에만 자연스럽게 넣습니다.
 - 팟캐스트 대본은 기호와 마크다운을 줄이고 TTS가 자연스럽게 읽도록 작성합니다.
+- PODCAST_50과 PODCAST_80은 각 줄을 반드시 "여자:" 또는 "남자:"로 시작하고, 여자와 남자가 한 줄씩 번갈아 말합니다.
+- 첫 번째 줄은 여자, 두 번째 줄은 남자입니다. 같은 화자가 두 줄 연속 말하지 않습니다.
 - PODCAST_50과 PODCAST_80은 분량과 내용 밀도가 분명히 달라야 합니다.
 
 ## 출력 형식
@@ -120,9 +123,12 @@ def beta_build_prompt(payload: BetaGeminiRequest) -> str:
 약 50초 팟캐스트 대본
 
 [BLOCK:PODCAST_80]
-약 80초 팟캐스트 대본
+약 80초 여자·남자 대화형 팟캐스트 대본
 
-출력 전에 8개 콘텐츠 BLOCK 누락 여부를 내부적으로 확인하세요.
+[BLOCK:THUMBNAIL_PROMPT]
+9:16 세로형 썸네일 이미지 생성용 상세 프롬프트
+
+출력 전에 8개 콘텐츠 BLOCK과 THUMBNAIL_PROMPT 누락 여부를 내부적으로 확인하세요.
 """
 
 
@@ -156,7 +162,7 @@ def beta_extract_json_object(text: str) -> dict[str, Any]:
 
 def beta_extract_blocks(text: str) -> dict[str, Any]:
     cleaned = re.sub(r"```(?:text|markdown|json)?", "", str(text or ""), flags=re.I).replace("```", "").strip()
-    names = ["TITLE", "DESCRIPTION", *CHANNEL_KEYS]
+    names = ["TITLE", "DESCRIPTION", *CHANNEL_KEYS, "THUMBNAIL_PROMPT"]
     found: dict[str, str] = {}
     for index, name in enumerate(names):
         start_tag = f"[BLOCK:{name}]"
@@ -173,6 +179,7 @@ def beta_extract_blocks(text: str) -> dict[str, Any]:
             "title": found.get("TITLE", "").strip(),
             "description": found.get("DESCRIPTION", "").strip(),
             "channels": {key: found[key] for key in CHANNEL_KEYS},
+            "thumbnail_prompt": found.get("THUMBNAIL_PROMPT", "").strip(),
         }
     raise ValueError("Gemini 응답에서 SNS 8채널 BLOCK을 찾지 못했습니다.")
 
@@ -204,6 +211,7 @@ def beta_parse_content(text: str, image_count: int) -> dict[str, Any]:
         "podcast_80": podcast_80,
         "podcast_script": podcast_50,
         "script": podcast_50,
+        "thumbnail_prompt": str(data.get("thumbnail_prompt", "")).strip(),
         "provider": "gemini",
         "model": beta_gemini_model(),
     }
@@ -273,6 +281,9 @@ def beta_gemini_generate_for_job(beta_job_id: str) -> dict[str, Any]:
     script = content["podcast_50"]
     (job_dir / "script.txt").write_text(script, encoding="utf-8")
     (job_dir / "podcast_script.txt").write_text(script, encoding="utf-8")
+    thumbnail_prompt = str(content.get("thumbnail_prompt") or "").strip()
+    if thumbnail_prompt:
+        (job_dir / "thumbnail_prompt.md").write_text(thumbnail_prompt + "\n", encoding="utf-8")
     tmp = result_path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(result_path)

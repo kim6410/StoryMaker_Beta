@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 import json
+import hashlib
 import shutil
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -63,11 +64,16 @@ def beta_browser_manifest(beta_job_id: str) -> JSONResponse:
     manifest = {
         "beta_job_id": beta_job_id,
         "title": result.get("title", "Beta 제작"),
+        "business": result.get("business", {}),
+        "watermark": (result.get("business", {}) or {}).get("name") or "StoryMaker Beta",
+        "thumbnail_prompt": result.get("content", {}).get("thumbnail_prompt", ""),
         "duration_seconds": result.get("duration_seconds"),
         "channels": result.get("content", {}).get("channels", {}),
         "channel_order": result.get("content", {}).get("channel_order", []),
         "script_key": "PODCAST_50",
         "script": result.get("content", {}).get("podcast_50") or result.get("content", {}).get("podcast_script") or result.get("content", {}).get("script", ""),
+        "script_hash": hashlib.sha256((result.get("content", {}).get("podcast_50") or result.get("content", {}).get("podcast_script") or result.get("content", {}).get("script", "")).encode("utf-8")).hexdigest(),
+        "voice_script_hash": result.get("assets", {}).get("voice_script_hash"),
         "images": [f"/beta-api/browser/jobs/{beta_job_id}/image/{index}" for index in range(1, len(images) + 1)],
         "videos": [f"/beta-api/browser/jobs/{beta_job_id}/video/{index}" for index in range(1, len(videos) + 1)],
         "voice_wav": f"/beta-api/browser/jobs/{beta_job_id}/voice-wav" if (output / "voice.wav").exists() else None,

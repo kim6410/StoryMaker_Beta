@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StoryMaker Beta - Gemini Web Worker V2
 // @namespace    storymaker-beta-gemini-worker-v2
-// @version      2.1.3
+// @version      2.1.6
 // @description  StoryMaker Beta dedicated Gemini web worker
 // @match        https://gemini.google.com/*
 // @grant        GM_xmlhttpRequest
@@ -17,7 +17,7 @@
 
   const BACKEND = 'http://192.168.0.62:8021';
   const POLL_MS = 1500;
-  const VERSION = '2.1.3';
+  const VERSION = '2.1.6';
   const SINGLETON = '__STORYMAKER_BETA_GEMINI_WORKER_V2__';
   const ACTIVE_JOB_KEY = 'storymaker_beta_active_gemini_job_id';
 
@@ -252,7 +252,7 @@
     let selectedNode = null;
     let last = '';
     let stable = 0;
-    for (let i = 0; i < 180; i++) {
+    while (true) {
       await sleep(1000);
       const candidate = selectedNode
         ? { node: selectedNode, text: nodeText(selectedNode) }
@@ -269,7 +269,6 @@
       if (stable >= 3 && text.includes('"channels"') && text.includes('"title"')) return text;
       if (stable >= 6 && text.length > 100) return text;
     }
-    throw new Error('Gemini 새 응답 완료를 확인하지 못했습니다.');
   }
 
   async function ack(jobId, status, error = null) {
@@ -303,6 +302,8 @@
         injected = String(box.innerText || box.textContent || box.value || '').trim();
       }
       if (!injected) throw new Error('Gemini 프롬프트 입력 확인에 실패했습니다.');
+      console.log('[StoryMaker Beta Gemini] 프롬프트 입력 확인 완료 · 전송 전 1초 대기');
+      await sleep(1000);
       await sendPrompt(box);
       await sleep(1000);
       const remaining = String(box.innerText || box.textContent || box.value || '').trim();
@@ -353,14 +354,81 @@
     return false;
   }
 
+
+  function imageSnapshot() {
+    return new Set(queryAll('img').map((img) => img.currentSrc || img.src).filter(Boolean));
+  }
+
+  async function waitForGeneratedImage(before) {
+    while (true) {
+      await sleep(1500);
+      const candidates = queryAll('img').filter((img) => {
+        const src = img.currentSrc || img.src || '';
+        return isVisible(img) && src && !before.has(src) && (img.naturalWidth >= 512 || img.width >= 512) && (img.naturalHeight >= 512 || img.height >= 512);
+      });
+      if (candidates.length) return candidates[candidates.length - 1].currentSrc || candidates[candidates.length - 1].src;
+    }
+    throw new Error('AI가 생성한 썸네일 이미지를 찾지 못했습니다.');
+  }
+
+  function imageToDataUrl(url) {
+    return new Promise((resolve, reject) => {
+      if (url.startsWith('blob:') || url.startsWith('data:')) {
+        fetch(url).then((r) => r.blob()).then((blob) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => reject(new Error('썸네일 이미지 읽기 실패'));
+          reader.readAsDataURL(blob);
+        }).catch(reject);
+        return;
+      }
+      GM_xmlhttpRequest({
+        method: 'GET', url, responseType: 'blob',
+        onload: (res) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => reject(new Error('썸네일 이미지 변환 실패'));
+          reader.readAsDataURL(res.response);
+        },
+        onerror: () => reject(new Error('썸네일 이미지 다운로드 실패'))
+      });
+    });
+  }
+
+  async function runThumbnailJob(job) {
+    const jobId = String(job.job_id || '');
+    const workerId = `tampermonkey-beta-v2-${VERSION}`;
+    try {
+      const box = promptBox();
+      if (!box) throw new Error('AI 입력창을 찾지 못했습니다.');
+      const before = imageSnapshot();
+      await request('POST', '/beta-api/gemini-worker/thumbnail/ack', { job_id: jobId, status: 'claimed', worker_id: workerId });
+      await injectPrompt(box, String(job.prompt || ''));
+      await sleep(1000);
+      await sendPrompt(box);
+      await request('POST', '/beta-api/gemini-worker/thumbnail/ack', { job_id: jobId, status: 'sent', worker_id: workerId });
+      const imageUrl = await waitForGeneratedImage(before);
+      const dataUrl = await imageToDataUrl(imageUrl);
+      await request('POST', '/beta-api/gemini-worker/thumbnail/result', { job_id: jobId, worker_id: workerId, data_url: dataUrl });
+    } catch (error) {
+      await request('POST', '/beta-api/gemini-worker/thumbnail/ack', { job_id: jobId, status: 'error', worker_id: workerId, error: String(error.message || error) }).catch(() => {});
+    }
+  }
+
   async function loop() {
     if (state.running) return;
     state.running = true;
     try {
+      const thumbResponse = await request('GET', '/beta-api/gemini-worker/thumbnail/status');
+      const thumbJob = thumbResponse.data || {};
+      if (thumbJob.action === 'GENERATE_BETA_THUMBNAIL' && thumbJob.job_id && thumbJob.status === 'pending') {
+        await runThumbnailJob(thumbJob);
+        return;
+      }
       const response = await request('GET', '/beta-api/gemini-worker/status');
       const job = response.data || {};
       if (job.action === 'GENERATE_BETA_GEMINI' && job.job_id) {
-        if (job.status === 'pending' || job.status === 'claimed') await runJob(job);
+        if (job.status === 'pending') await runJob(job);
         else if (job.status === 'sent') await recoverSentJob(job);
       }
     } catch (error) {

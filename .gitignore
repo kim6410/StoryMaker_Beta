@@ -56,3 +56,5 @@ Thumbs.db
  
 # Local safety backups 
 backups/
+data/beta_thumbnail_worker_state.json
+data/v1_feature_scan.json

@@ -147,26 +147,19 @@
       const audioUrl = assets.browser_audio ? `/beta-api/browser/jobs/${encodeURIComponent(jobId)}/file/mp3` : assets.audio ? `/beta-api/jobs/${encodeURIComponent(jobId)}/file/audio` : '';
       const videoUrl = assets.browser_video ? `/beta-api/browser/jobs/${encodeURIComponent(jobId)}/file/mp4` : assets.video ? `/beta-api/jobs/${encodeURIComponent(jobId)}/file/video` : '';
       const subtitleUrl = assets.subtitle ? `/beta-api/jobs/${encodeURIComponent(jobId)}/file/subtitle` : '';
-      const thumbnailUrl = assets.thumbnail ? `/beta-api/jobs/${encodeURIComponent(jobId)}/file/thumbnail` : '';
+      const thumbnailUrl = assets.thumbnail ? `/beta-api/jobs/${encodeURIComponent(jobId)}/file/thumbnail` : (images.length ? `/beta-api/browser/jobs/${encodeURIComponent(jobId)}/image/1` : '');
       const images = assets.images || [];
       detail.innerHTML = `<div class="detail-head"><div><div class="badge">BETA ARCHIVE DETAIL</div><h2>${esc(job.title || 'Beta 제작')}</h2><p>${esc(job.business?.name || '')} · ${esc(job.business?.region || '')} · ${esc(job.business?.service || '')}</p></div><button id="archive-detail-close" type="button">닫기</button></div>
         <section class="detail-block"><h3>SNS 8채널</h3><div class="channel-tabs">${order.map((key, index) => `<button type="button" class="channel-tab${index === 0 ? ' active' : ''}" data-channel="${esc(key)}">${esc(channels[key]?.label || key)}</button>`).join('')}</div><pre id="archive-channel-content" class="channel-content">${esc(channels[first]?.content || '')}</pre></section>
         <div class="archive-sections archive-sections-all">
-          <button type="button" class="media-open-all" id="archive-media-open-all">제작 데이터 전체 열기</button>
-          <div id="archive-media-all" class="archive-media-all" hidden>
+          <div id="archive-media-all" class="archive-media-all">
             <section class="archive-section-static"><h3>업로드 이미지 ${images.length}장</h3><div class="image-grid">${images.map((_, index) => `<a href="/beta-api/browser/jobs/${encodeURIComponent(jobId)}/image/${index + 1}" target="_blank"><img loading="lazy" src="/beta-api/browser/jobs/${encodeURIComponent(jobId)}/image/${index + 1}" alt="이미지 ${index + 1}"></a>`).join('') || '<div class="empty-mini">이미지가 없습니다.</div>'}</div></section>
-            <section class="archive-section-static"><h3>팟캐스트 MP3</h3>${audioUrl ? `<a class="download-link" href="${audioUrl}" target="_blank" download>MP3 다운로드</a>` : '<div class="empty-mini">MP3가 없습니다.</div>'}</section>
-            <section class="archive-section-static"><h3>썸네일</h3>${thumbnailUrl ? `<a href="${thumbnailUrl}" target="_blank"><img class="thumbnail-preview" src="${thumbnailUrl}" alt="썸네일"></a>` : '<div class="empty-mini">썸네일이 없습니다.</div>'}</section>
-            <section class="archive-section-static"><h3>최종 MP4</h3>${videoUrl ? `<video controls src="${videoUrl}"></video><a class="download-link" href="${videoUrl}" target="_blank">MP4 열기</a>` : '<div class="empty-mini">MP4가 없습니다.</div>'}</section>
+            <section class="archive-section-static media-preview-card"><h3>팟캐스트 MP3</h3>${audioUrl ? `<audio class="audio-preview" controls preload="metadata" src="${audioUrl}"></audio><div class="media-download-row"><a class="download-link" href="${audioUrl}" target="_blank" download>MP3 다운로드</a></div>` : '<div class="empty-mini">MP3가 없습니다.</div>'}</section>
+            <section class="archive-section-static media-preview-card"><h3>썸네일</h3>${thumbnailUrl ? `<a href="${thumbnailUrl}" target="_blank"><img class="thumbnail-preview" loading="lazy" src="${thumbnailUrl}" alt="썸네일"></a>` : '<div class="empty-mini">썸네일이 없습니다.</div>'}</section>
+            <section class="archive-section-static media-preview-card"><h3>최종 MP4</h3>${videoUrl ? `<video class="mp4-preview" controls preload="metadata" playsinline src="${videoUrl}"></video><div class="media-download-row"><a class="download-link" href="${videoUrl}" target="_blank">MP4 크게 보기</a></div>` : '<div class="empty-mini">MP4가 없습니다.</div>'}</section>
           </div>
         </div>`;
       document.getElementById('archive-detail-close')?.addEventListener('click', closeDetail);
-      document.getElementById('archive-media-open-all')?.addEventListener('click', (event) => {
-        const all = document.getElementById('archive-media-all');
-        if (!all) return;
-        all.hidden = !all.hidden;
-        event.currentTarget.textContent = all.hidden ? '제작 데이터 전체 열기' : '제작 데이터 전체 닫기';
-      });
       detail.querySelectorAll('[data-channel]').forEach((button) => button.addEventListener('click', () => {
         detail.querySelectorAll('[data-channel]').forEach((item) => item.classList.toggle('active', item === button));
         document.getElementById('archive-channel-content').textContent = channels[button.dataset.channel]?.content || '';

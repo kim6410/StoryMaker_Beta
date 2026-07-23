@@ -1,10 +1,39 @@
 (() => {
   'use strict';
   const $ = (id) => document.getElementById(id);
-  const ui = { job:$('job'), load:$('load'), mp3:$('mp3'), mp4:$('mp4'), upload:$('upload'), diag:$('diag'), status:$('status'), canvas:$('canvas'), audio:$('audio'), video:$('video') };
+  const ui = { job:$('job'), load:$('load'), mp3:$('mp3'), mp4:$('mp4'), upload:$('upload'), diag:$('diag'), status:$('status'), canvas:$('canvas'), audio:$('audio'), video:$('video'), podcastProgressWrap:$('podcast-progress-wrap'), podcastProgressBar:$('podcast-progress-bar'), podcastProgressText:$('podcast-progress-text'), slideshowProgressWrap:$('slideshow-progress-wrap'), slideshowProgressBar:$('slideshow-progress-bar'), slideshowProgressText:$('slideshow-progress-text'), thumbnailImage:$('thumbnail-live-image'), thumbnailStatus:$('thumbnail-live-status') };
   const ctx = ui.canvas.getContext('2d');
-  let manifest = null, mp3Blob = null, mp4Blob = null;
+  let manifest = null, mp3Blob = null, mp4Blob = null, subtitles = [];
   const gpu = { ready:false, canvas:null, context:null, device:null, pipeline:null, sampler:null, uniformBuffer:null, textures:[] };
+  const progressTimers = { podcast:null, slideshow:null };
+
+  function setProgress(kind, percent, state='running') {
+    const safe = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+    const wrap = kind === 'podcast' ? ui.podcastProgressWrap : ui.slideshowProgressWrap;
+    const bar = kind === 'podcast' ? ui.podcastProgressBar : ui.slideshowProgressBar;
+    const text = kind === 'podcast' ? ui.podcastProgressText : ui.slideshowProgressText;
+    if (!wrap || !bar || !text) return;
+    wrap.hidden = false;
+    wrap.classList.toggle('complete', state === 'complete');
+    wrap.classList.toggle('error', state === 'error');
+    bar.style.width = `${safe}%`;
+    text.textContent = `${safe}%`;
+  }
+
+  function startPreparingProgress(kind, initial=2, cap=18) {
+    if (progressTimers[kind]) clearInterval(progressTimers[kind]);
+    let value = initial;
+    setProgress(kind, value);
+    progressTimers[kind] = setInterval(() => {
+      value = Math.min(cap, value + Math.max(1, Math.round((cap - value) * 0.18)));
+      setProgress(kind, value);
+    }, 280);
+  }
+
+  function stopPreparingProgress(kind) {
+    if (progressTimers[kind]) clearInterval(progressTimers[kind]);
+    progressTimers[kind] = null;
+  }
 
   async function initWebGPU() {
     if (!navigator.gpu) return false;
@@ -80,6 +109,49 @@
     gpu.device.queue.submit([encoder.finish()]);
     ctx.drawImage(gpu.canvas,0,0,ui.canvas.width,ui.canvas.height);
     return true;
+  }
+
+
+  function parseSrtTime(value) {
+    const match=String(value||'').trim().match(/(\d+):(\d+):(\d+)[,.](\d+)/);
+    if(!match) return 0;
+    return Number(match[1])*3600+Number(match[2])*60+Number(match[3])+Number(match[4].padEnd(3,'0').slice(0,3))/1000;
+  }
+
+  function parseSrt(text) {
+    return String(text||'').replace(/\r/g,'').trim().split(/\n{2,}/).map((block)=>{
+      const lines=block.split('\n');
+      const timing=lines.find((line)=>line.includes('-->')) || '';
+      const parts=timing.split('-->');
+      return {start:parseSrtTime(parts[0]),end:parseSrtTime(parts[1]),text:lines.filter((line)=>line && !/^\d+$/.test(line.trim()) && !line.includes('-->')).join(' ')};
+    }).filter((item)=>item.text && item.end>item.start);
+  }
+
+  function wrapCanvasText(text, maxWidth) {
+    const words=String(text||'').split(/\s+/); const lines=[]; let line='';
+    for(const word of words){
+      const test=line ? `${line} ${word}` : word;
+      if(ctx.measureText(test).width>maxWidth && line){lines.push(line);line=word;} else line=test;
+    }
+    if(line) lines.push(line);
+    return lines.slice(0,3);
+  }
+
+  function drawSubtitleAndWatermark(time) {
+    const cue=subtitles.find((item)=>time>=item.start && time<item.end);
+    const watermark=String(manifest?.watermark || 'StoryMaker Beta').trim();
+    ctx.save();
+    ctx.textAlign='right'; ctx.font='bold 30px sans-serif';
+    ctx.fillStyle='rgba(255,255,255,.86)'; ctx.strokeStyle='rgba(0,0,0,.72)'; ctx.lineWidth=5;
+    ctx.strokeText(watermark,1030,72); ctx.fillText(watermark,1030,72);
+    if(cue){
+      ctx.textAlign='center'; ctx.font='bold 52px sans-serif';
+      const lines=wrapCanvasText(cue.text,920); const lineHeight=68; const boxHeight=lines.length*lineHeight+54; const top=1780-boxHeight;
+      ctx.fillStyle='rgba(0,0,0,.68)'; ctx.fillRect(50,top,980,boxHeight);
+      ctx.fillStyle='#fff'; ctx.strokeStyle='rgba(0,0,0,.95)'; ctx.lineWidth=7;
+      lines.forEach((line,index)=>{const y=top+54+index*lineHeight;ctx.strokeText(line,540,y);ctx.fillText(line,540,y);});
+    }
+    ctx.restore();
   }
 
   function diagnostics() {
@@ -158,12 +230,16 @@
   async function loadJob() {
     const id=ui.job.value.trim();
     if (!id) return;
-    ui.status.textContent='작업 매니페스트를 읽는 중...';
-    const data=await request(`/beta-api/browser/jobs/${encodeURIComponent(id)}/manifest`);
-    manifest=data.manifest;
-    if (!manifest.voice_wav) throw new Error('먼저 백엔드 음성 준비를 실행해 voice.wav를 생성하세요.');
+    ui.status.textContent='현재 작업의 매니페스트를 확인하는 중...';
+    const data=await request(`/beta-api/browser/jobs/${encodeURIComponent(id)}/manifest?t=${Date.now()}`);
+    const nextManifest=data.manifest;
+    if (!nextManifest || nextManifest.beta_job_id !== id) throw new Error('현재 작업과 다른 매니페스트가 반환되었습니다.');
+    manifest=nextManifest;
+    subtitles = manifest.subtitle ? parseSrt(await fetch(manifest.subtitle,{cache:'no-store'}).then(r=>r.ok?r.text():'')) : [];
+    if (!manifest.voice_wav) throw new Error('현재 PODCAST_50 음성이 아직 준비되지 않았습니다.');
+    if (manifest.voice_script_hash && manifest.script_hash && manifest.voice_script_hash !== manifest.script_hash) throw new Error('현재 원고와 음성 버전이 다릅니다. 팟캐스트 생성을 다시 눌러주세요.');
     ui.mp3.disabled=false; ui.mp4.disabled=false;
-    ui.status.textContent=`작업 준비 완료 · 기본 대본 ${manifest.script_key || 'PODCAST_50'} · 이미지 ${manifest.images.length}장 · 동영상 ${(manifest.videos || []).length}개`;
+    ui.status.textContent=`현재 작업 준비 완료 · ${manifest.script_key || 'PODCAST_50'} · 이미지 ${manifest.images.length}장 · 동영상 ${(manifest.videos || []).length}개`;
   }
 
   function parseWav(buffer) {
@@ -182,6 +258,8 @@
   }
 
   async function encodeMp3() {
+    stopPreparingProgress('podcast');
+    setProgress('podcast', 22);
     refreshDiag();
     if (!window.WasmMediaEncoder) throw new Error('Beta 전용 MP3 WASM 인코더를 불러오지 못했습니다.');
     const wav=await fetch(manifest.voice_wav).then(r=>r.arrayBuffer());
@@ -197,17 +275,24 @@
       }
       const encoded=encoder.encode(planar);
       if(encoded.length) parts.push(new Uint8Array(encoded));
-      ui.status.textContent=`브라우저 WASM MP3 생성 중 · ${Math.round((frame+frames)/totalFrames*100)}%`;
+      const rawPercent=(frame+frames)/totalFrames;
+      const percent=Math.round(22 + rawPercent*78);
+      setProgress('podcast', percent);
+      ui.status.textContent=`팟캐스트 생성 중 · ${percent}%`;
       await new Promise(r=>setTimeout(r,0));
     }
     const last=encoder.finalize(); if(last.length) parts.push(new Uint8Array(last));
     mp3Blob=new Blob(parts,{type:'audio/mpeg'});
     if(mp3Blob.size<128) throw new Error('WASM MP3 결과가 비어 있습니다.');
-    ui.audio.src=URL.createObjectURL(mp3Blob); ui.audio.hidden=false; ui.upload.disabled=!mp4Blob;
-    ui.status.textContent=`브라우저 WASM MP3 생성 완료 · ${(mp3Blob.size/1024).toFixed(1)}KB`;
+    ui.audio.src=URL.createObjectURL(mp3Blob); ui.audio.hidden=false; ui.audio.controls=true; ui.audio.currentTime=0; ui.upload.disabled=!mp4Blob;
+    ui.audio.scrollIntoView({behavior:'smooth',block:'nearest'});
+    ui.audio.play().catch(()=>{});
+    setProgress('podcast', 100, 'complete');
+    ui.status.textContent=`팟캐스트 생성 완료 · ${(mp3Blob.size/1024).toFixed(1)}KB`;
   }
 
   async function renderMp4() {
+    startPreparingProgress('slideshow', 2, 22);
     const d=refreshDiag();
     if(!d.mp4MimeType) throw new Error('이 브라우저는 MP4 MediaRecorder를 지원하지 않습니다.');
     const images=await Promise.all(manifest.images.map(loadImage));
@@ -226,10 +311,13 @@
     recorder.ondataavailable=(e)=>{if(e.data.size)chunks.push(e.data)};
     const stopped=new Promise(resolve=>recorder.onstop=resolve);
     const duration=audioBuffer.duration, started=performance.now();
+    stopPreparingProgress('slideshow');
+    setProgress('slideshow', 25);
     recorder.start(1000); source.start();
     await new Promise(resolve=>{
       function frame(now){
         const t=(now-started)/1000, p=Math.min(1,t/duration), slot=Math.min(media.length-1,Math.floor(p*media.length));
+        setProgress('slideshow', 25 + p*75);
         const local=(p*media.length)-slot, current=media[slot];
         if(current.type==='video'){
           const clipDuration=Math.max(current.item.duration || 0,0.1);
@@ -239,16 +327,16 @@
         }else{
           drawCover(current.item,local,current.index);
         }
-        ctx.fillStyle='rgba(0,0,0,.55)';ctx.fillRect(0,1540,1080,380);
-        ctx.fillStyle='#fff';ctx.font='bold 52px sans-serif';ctx.textAlign='center';
-        const label=manifest.script_key === 'PODCAST_50' ? '팟캐스트 50초' : '팟캐스트';ctx.fillText(label,540,1650);
+        drawSubtitleAndWatermark(t);
         if(t<duration) requestAnimationFrame(frame); else resolve();
       } requestAnimationFrame(frame);
     });
     await new Promise(r=>setTimeout(r,300)); recorder.stop(); await stopped; await audioContext.close();
     mp4Blob=new Blob(chunks,{type:'video/mp4'});
-    ui.video.src=URL.createObjectURL(mp4Blob);ui.video.hidden=false;ui.upload.disabled=!mp3Blob;
-    ui.status.textContent=`브라우저 MP4 생성 완료 · ${(mp4Blob.size/1024/1024).toFixed(2)}MB`;
+    ui.video.src=URL.createObjectURL(mp4Blob);ui.video.hidden=false;ui.video.controls=true;ui.upload.disabled=!mp3Blob;
+    ui.video.scrollIntoView({behavior:'smooth',block:'nearest'});
+    setProgress('slideshow', 100, 'complete');
+    ui.status.textContent=`슬라이드쇼 생성 완료 · ${(mp4Blob.size/1024/1024).toFixed(2)}MB`;
   }
 
   async function upload() {
@@ -258,13 +346,100 @@
     body.append('browser_mp4',mp4Blob,'browser_final.mp4');
     body.append('diagnostics',JSON.stringify(refreshDiag()));
     const data=await request(`/beta-api/browser/jobs/${manifest.beta_job_id}/upload`,{method:'POST',body});
-    ui.status.textContent=`Beta 보관함 저장 완료 · ${Object.keys(data.saved).join(', ')}`;
+    ui.status.textContent=`Beta 보관함 저장 완료 · ${Object.keys(data.saved).join(', ')} · 보관함으로 이동합니다.`;
+    await new Promise((resolve)=>setTimeout(resolve,700));
+    location.href='/beta/archive';
+  }
+
+
+  async function startThumbnailBackground() {
+    if (!manifest?.beta_job_id || !window.StoryMakerBetaQueueThumbnail) return;
+    if (ui.thumbnailStatus) ui.thumbnailStatus.textContent = 'AI 썸네일 프롬프트를 전송하는 중...';
+    try {
+      await window.StoryMakerBetaQueueThumbnail();
+      const started = Date.now();
+      while (Date.now() - started < 240000) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const state = await request('/beta-api/gemini-worker/thumbnail/status');
+        const data = state.data || {};
+        if (data.job_id !== manifest.beta_job_id) continue;
+        if (ui.thumbnailStatus) ui.thumbnailStatus.textContent = `AI 썸네일 · ${data.status || '대기 중'}`;
+        if (data.status === 'completed') {
+          if (ui.thumbnailImage) {
+            ui.thumbnailImage.src = `/beta-api/jobs/${encodeURIComponent(manifest.beta_job_id)}/file/thumbnail?t=${Date.now()}`;
+            ui.thumbnailImage.hidden = false;
+          }
+          if (ui.thumbnailStatus) ui.thumbnailStatus.textContent = 'AI 썸네일 생성 완료';
+          return;
+        }
+        if (data.status === 'error') throw new Error(data.error || 'AI 썸네일 생성 실패');
+      }
+      throw new Error('AI 썸네일 응답 시간이 초과되었습니다.');
+    } catch (error) {
+      if (ui.thumbnailStatus) ui.thumbnailStatus.textContent = `AI 썸네일: ${error.message}`;
+    }
+  }
+
+  async function ensurePodcastReady() {
+    const currentJobId=ui.job.value.trim();
+    if (!currentJobId) throw new Error('현재 작업 ID가 없습니다.');
+    manifest=null; mp3Blob=null; mp4Blob=null; subtitles=[];
+    ui.audio.pause(); ui.video.pause();
+    ui.audio.removeAttribute('src'); ui.video.removeAttribute('src');
+    ui.audio.hidden=true; ui.video.hidden=true; ui.upload.disabled=true; ui.mp4.disabled=true;
+    if (!window.StoryMakerBetaPrepareVoice) throw new Error('현재 PODCAST_50 음성 준비 기능을 찾지 못했습니다.');
+    ui.status.textContent='현재 PODCAST_50으로 여자·남자 음성을 새로 만드는 중...';
+    await window.StoryMakerBetaPrepareVoice();
+    if (ui.job.value.trim()!==currentJobId) throw new Error('음성 생성 중 작업이 변경되었습니다.');
+    await loadJob();
   }
 
   ui.load.onclick=()=>loadJob().catch(e=>ui.status.textContent=`불러오기 실패: ${e.message}`);
-  ui.mp3.onclick=()=>encodeMp3().catch(e=>ui.status.textContent=`MP3 실패: ${e.message}`);
-  ui.mp4.onclick=()=>renderMp4().catch(e=>ui.status.textContent=`MP4 실패: ${e.message}`);
+  ui.mp3.onclick=async()=>{
+    ui.mp3.disabled=true;
+    startPreparingProgress('podcast', 2, 20);
+    ui.status.textContent='팟캐스트 음성과 인코더를 준비하는 중...';
+    try {
+      startThumbnailBackground();
+      await ensurePodcastReady();
+      await encodeMp3();
+    } catch(e) {
+      stopPreparingProgress('podcast');
+      setProgress('podcast',0,'error');
+      ui.status.textContent=`팟캐스트 실패: ${e.message}`;
+    } finally {
+      ui.mp3.disabled=false;
+    }
+  };
+  ui.mp4.onclick=async()=>{
+    ui.mp4.disabled=true;
+    startPreparingProgress('slideshow', 2, 22);
+    ui.status.textContent='슬라이드쇼 자원과 영상 프레임을 준비하는 중...';
+    try {
+      await renderMp4();
+    } catch(e) {
+      stopPreparingProgress('slideshow');
+      setProgress('slideshow',0,'error');
+      ui.status.textContent=`슬라이드쇼 실패: ${e.message}`;
+    } finally {
+      ui.mp4.disabled=false;
+    }
+  };
   ui.upload.onclick=()=>upload().catch(e=>ui.status.textContent=`저장 실패: ${e.message}`);
+  window.StoryMakerBetaBrowserRenderer = {
+    setJob(jobId) { ui.job.value = String(jobId || ''); },
+    prime(jobId) {
+      const nextJobId=String(jobId||'');
+      ui.job.value=nextJobId; manifest=null; mp3Blob=null; mp4Blob=null; subtitles=[];
+      ui.audio.pause(); ui.video.pause();
+      ui.audio.removeAttribute('src'); ui.video.removeAttribute('src');
+      ui.audio.hidden=true; ui.video.hidden=true; ui.upload.disabled=true; ui.mp4.disabled=true;
+      ui.mp3.disabled=!nextJobId;
+      ui.status.textContent=nextJobId?'현재 작업의 PODCAST_50 음성을 새로 만들 준비가 됐습니다.':'작업을 준비 중입니다.';
+    },
+    loadJob: () => loadJob(),
+    refreshDiag: () => refreshDiag()
+  };
   const params=new URLSearchParams(location.search);
   const saved=params.get('job') || sessionStorage.getItem('storymaker_beta_current_job');
   if(saved){ ui.job.value=saved; setTimeout(()=>loadJob().catch(e=>ui.status.textContent=`불러오기 실패: ${e.message}`),200); }
