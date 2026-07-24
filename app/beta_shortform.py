@@ -234,16 +234,26 @@ async def prepare_shortform_audio(job_id: str, request: Request) -> JSONResponse
     voice = output / "voice.wav"
     if not voice.exists():
         raise HTTPException(status_code=409, detail="먼저 PODCAST_50 음성을 준비해야 합니다.")
-    music_candidates = []
-    for folder in (ROOT / "data" / "music", ROOT / "media" / "music", ROOT / "data"):
-        if folder.exists():
-            music_candidates.extend(p for p in folder.glob("*") if p.suffix.lower() in {".mp3", ".wav", ".m4a", ".aac"} and "voice" not in p.name.lower())
+    music_root = (ROOT / "media" / "music").resolve()
+    music_candidates = [
+        path for path in music_root.glob("*")
+        if path.is_file()
+        and path.suffix.lower() in {".mp3", ".wav", ".m4a", ".aac"}
+        and path.name.lower() != "beta_test_music.mp3"
+        and "voice" not in path.name.lower()
+    ] if music_root.exists() else []
     if not music_candidates:
         raise HTTPException(status_code=404, detail="Beta 랜덤 배경음악 파일이 없습니다.")
     result_path = job_dir / "result.json"
     result = read_json(result_path)
     previous = str((result.get("shortform") or {}).get("selected_music") or "")
-    selected = Path(previous) if previous and Path(previous).exists() else random.choice(music_candidates)
+    previous_path = Path(previous).resolve() if previous and Path(previous).exists() else None
+    previous_is_library_music = bool(
+        previous_path
+        and previous_path.parent == music_root
+        and previous_path.name.lower() != "beta_test_music.mp3"
+    )
+    selected = previous_path if previous_is_library_music else random.choice(music_candidates)
     volume = max(0.0, min(float(payload.get("bgm_volume", 0.15) or 0.15), 0.5))
     shortform_dir = output / "shortform"
     shortform_dir.mkdir(parents=True, exist_ok=True)
