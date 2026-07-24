@@ -607,7 +607,7 @@ Copy-TreeSafe 'WORK_LOGS' -ExcludeDirectoryNames @('__pycache__') -ExcludeExtens
 
 # Copy runtime data except live SQLite database sidecar files.
 Copy-TreeSafe 'data' `
-    -ExcludeDirectoryNames @('chrome-debug', 'chrome-test', '__pycache__', 'cache', 'tmp', 'temp') `
+    -ExcludeDirectoryNames @('chrome-debug', 'chrome-test', 'chrome-ui-verify', '__pycache__', 'cache', 'tmp', 'temp') `
     -ExcludeFileNames @('storymaker_beta.db', 'storymaker_beta.db-wal', 'storymaker_beta.db-shm') `
     -ExcludeExtensions @('.pyc', '.pyo', '.log', '.tmp')
 
