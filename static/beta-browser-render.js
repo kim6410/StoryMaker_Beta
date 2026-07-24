@@ -435,6 +435,9 @@ async function loadBetaRenderBrowserShortform() {
         const remaining = raw > 1 ? Math.max(0, elapsed * (100 - raw) / raw) : 0;
         ui.status.textContent = `${progress?.stage || '고속 MP4 제작 중'} · ${Math.round(raw)}%${remaining ? ` · 약 ${Math.ceil(remaining)}초 남음` : ''}`;
         detailCallback?.({type:'render', rawPercent:raw, stage:progress?.stage || '고속 MP4 제작 중', remaining});
+      },
+      onPreviewFrame: (frameCanvas) => {
+        detailCallback?.({type:'frame', canvas:frameCanvas});
       }
     });
 

@@ -16,7 +16,7 @@
     subtitleSize: q('sf-subtitle-size'), subtitlePosition: q('sf-subtitle-position'),
     previewBrand: q('sf-preview-brand'), previewTitle: q('sf-preview-title'), previewSubtitle: q('sf-preview-subtitle'),
     previewBusiness: q('sf-preview-business'), previewPhone: q('sf-preview-phone'), status: q('sf-status'), progress: q('sf-progress'),
-    imageConnected:q('sf-image-connected'), videoConnected:q('sf-video-connected'), log: q('sf-log'), make: q('sf-make'), liveImage: q('sf-live-image'), sceneBadge: q('sf-scene-badge'), play: q('sf-play'), stop: q('sf-stop'), archive: q('sf-archive'), finalVideo: q('sf-final-video'), wave: q('sf-wave')
+    imageConnected:q('sf-image-connected'), videoConnected:q('sf-video-connected'), log: q('sf-log'), make: q('sf-make'), liveImage: q('sf-live-image'), liveCanvas: q('sf-live-canvas'), sceneBadge: q('sf-scene-badge'), play: q('sf-play'), stop: q('sf-stop'), archive: q('sf-archive'), finalVideo: q('sf-final-video'), wave: q('sf-wave')
   };
 
   const defaults = {
@@ -206,6 +206,26 @@
     });
   }
 
+  function showRenderedFrame(sourceCanvas) {
+    if (!sourceCanvas || !fields.liveCanvas) return;
+    const context = fields.liveCanvas.getContext('2d', { alpha: false });
+    if (!context) return;
+    fields.liveCanvas.width = sourceCanvas.width || 720;
+    fields.liveCanvas.height = sourceCanvas.height || 1280;
+    context.drawImage(sourceCanvas, 0, 0, fields.liveCanvas.width, fields.liveCanvas.height);
+    fields.liveCanvas.hidden = false;
+    fields.liveCanvas.closest('.sf-phone')?.classList.add('has-render-preview');
+  }
+
+  function clearRenderedFrame() {
+    if (fields.liveCanvas) {
+      fields.liveCanvas.hidden = true;
+      const context = fields.liveCanvas.getContext('2d');
+      context?.clearRect(0, 0, fields.liveCanvas.width, fields.liveCanvas.height);
+    }
+    fields.finalVideo?.closest('.sf-phone')?.classList.remove('has-render-preview');
+  }
+
   async function makeVideo() {
     if (!state.jobId) return;
     fields.make.disabled = true;
@@ -216,8 +236,11 @@
       await saveDefaults();
       stopScenePreview();
       preview.pause();
+      preview.pause();
       preview.hidden = true;
       preview.removeAttribute('src');
+      preview.closest('.sf-phone')?.classList.remove('has-final');
+      clearRenderedFrame();
       preview.load();
       preview.volume = 0.8;
       phone?.classList.remove('has-final');
@@ -229,8 +252,10 @@
       currentValues.one_time_music_file = fields.bgmMode.value === 'one_time' ? fields.bgmUpload.files?.[0] || null : null;
       const result = await renderer.createVideoOnly(state.jobId, currentValues, (percent, message, detail) => {
         setProgress(percent, message);
-        if (detail) detailLog(detail);
+        if (detail?.type === 'frame') showRenderedFrame(detail.canvas);
+        else if (detail) detailLog(detail);
       });
+      clearRenderedFrame();
       preview.src = result.videoUrl;
       preview.hidden = false;
       preview.volume = 0.8;
