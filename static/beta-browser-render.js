@@ -296,7 +296,8 @@ async function loadBetaRenderBrowserShortform() {
     if(mp3Blob.size<128) throw new Error('WASM MP3 결과가 비어 있습니다.');
     ui.audio.src=URL.createObjectURL(mp3Blob); ui.audio.hidden=false; ui.audio.controls=true; ui.audio.currentTime=0; ui.upload.disabled=!mp4Blob;
     ui.audio.scrollIntoView({behavior:'smooth',block:'nearest'});
-    ui.audio.play().catch(()=>{});
+    ui.audio.pause();
+    ui.audio.currentTime=0;
     setProgress('podcast', 100, 'complete');
     ui.status.textContent=`팟캐스트 생성 완료 · ${(mp3Blob.size/1024).toFixed(1)}KB`;
   }
