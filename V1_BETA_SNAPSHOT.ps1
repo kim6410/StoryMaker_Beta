@@ -7,6 +7,7 @@ $ProgressPreference = 'SilentlyContinue'
 
 $LiveRoot = 'F:\StoryMaker_beta'
 $BackupBase = 'F:\v1_backup\V1_BETA0724'
+$PreviousBackupBase = 'F:\v1_backup\이전 백업\V1_BETA0724'
 $TimeStamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $SafetyRoot = Join-Path $BackupBase "PRE_RESTORE_$TimeStamp"
 $TempScriptRoot = Split-Path -Parent $PSCommandPath
@@ -40,25 +41,34 @@ function Stop-PortListener {
 }
 
 function Get-ValidSnapshots {
-    if (-not (Test-Path -LiteralPath $BackupBase -PathType Container)) { return @() }
-    $items = foreach ($dir in Get-ChildItem -LiteralPath $BackupBase -Directory -Filter 'SNAPSHOT_*' -Force | Sort-Object Name -Descending) {
-        $complete = Join-Path $dir.FullName 'BACKUP_COMPLETE.txt'
-        $sqlite = Join-Path $dir.FullName 'RESTORE_INFO\sqlite_backup_integrity_check.txt'
-        $manifest = Join-Path $dir.FullName 'SHA256_MANIFEST_BACKUP.txt'
-        if (-not (Test-Path -LiteralPath $complete -PathType Leaf)) { continue }
-        $statusLine = Get-Content -LiteralPath $complete -ErrorAction SilentlyContinue | Where-Object { $_ -eq 'STATUS=PASS' } | Select-Object -First 1
-        $sqliteOk = (Test-Path -LiteralPath $sqlite -PathType Leaf) -and ((Get-Content -LiteralPath $sqlite -ErrorAction SilentlyContinue | Select-Object -First 1).Trim() -eq 'ok')
-        if ($statusLine -and $sqliteOk -and (Test-Path -LiteralPath $manifest -PathType Leaf)) {
-            [pscustomobject]@{
-                Name = $dir.Name
-                Path = $dir.FullName
-                Created = $dir.CreationTime
-                Complete = $complete
-                Manifest = $manifest
+    $roots = @(
+        [pscustomobject]@{ Path = $BackupBase; Label = 'CURRENT' },
+        [pscustomobject]@{ Path = $PreviousBackupBase; Label = 'PREVIOUS' }
+    )
+    $items = foreach ($root in $roots) {
+        if (-not (Test-Path -LiteralPath $root.Path -PathType Container)) { continue }
+        foreach ($dir in Get-ChildItem -LiteralPath $root.Path -Directory -Filter 'SNAPSHOT_*' -Force | Sort-Object Name -Descending) {
+            $complete = Join-Path $dir.FullName 'BACKUP_COMPLETE.txt'
+            $sqlite = Join-Path $dir.FullName 'RESTORE_INFO\sqlite_backup_integrity_check.txt'
+            $manifest = Join-Path $dir.FullName 'SHA256_MANIFEST_BACKUP.txt'
+            if (-not (Test-Path -LiteralPath $complete -PathType Leaf)) { continue }
+            $statusLine = Get-Content -LiteralPath $complete -ErrorAction SilentlyContinue | Where-Object { $_ -eq 'STATUS=PASS' } | Select-Object -First 1
+            $sqliteOk = (Test-Path -LiteralPath $sqlite -PathType Leaf) -and ((Get-Content -LiteralPath $sqlite -ErrorAction SilentlyContinue | Select-Object -First 1).Trim() -eq 'ok')
+            if ($statusLine -and $sqliteOk -and (Test-Path -LiteralPath $manifest -PathType Leaf)) {
+                $gitHeadLine = Get-Content -LiteralPath $complete -ErrorAction SilentlyContinue | Where-Object { $_ -like 'GIT_HEAD=*' } | Select-Object -First 1
+                [pscustomobject]@{
+                    Name = $dir.Name
+                    Path = $dir.FullName
+                    Created = $dir.CreationTime
+                    Complete = $complete
+                    Manifest = $manifest
+                    SourceLabel = $root.Label
+                    GitHead = if ($gitHeadLine) { $gitHeadLine.Substring(9) } else { 'unknown' }
+                }
             }
         }
     }
-    return @($items)
+    return @($items | Sort-Object Created -Descending)
 }
 
 function Verify-SnapshotManifest {
@@ -140,7 +150,7 @@ function Copy-SnapshotToLive {
     }
 
     # Keep the current restore launcher available after rollback even if the selected snapshot predates it.
-    foreach ($name in @('V1_BETA_SNAPSHOT.ps1','V1_BETA_SNAPSHOT.bat')) {
+    foreach ($name in @('V1_BETA_SNAPSHOT.ps1','V1_BETA_SNAPSHOT.bat','V1_BETA_BACKUP.ps1','V1_BETA_BACKUP.bat')) {
         $source = Join-Path $TempScriptRoot $name
         if (Test-Path -LiteralPath $source -PathType Leaf) {
             Copy-Item -LiteralPath $source -Destination (Join-Path $LiveRoot $name) -Force
@@ -160,12 +170,67 @@ function Test-RestoredRuntime {
         if ($LASTEXITCODE -ne 0 -or $importResult -notcontains 'BETA_RUNTIME_OK') { throw "Runtime import failed: $($importResult -join ' ')" }
         Write-Log 'Restored Beta runtime import passed' 'OK'
 
+        $pipCheck = & $python -m pip check 2>&1
+        if ($LASTEXITCODE -ne 0 -or (($pipCheck | Out-String) -notmatch 'No broken requirements found')) {
+            Write-Log "Restored pip check recorded dependency mismatch: $($pipCheck -join ' ')" 'WARN'
+        } else {
+            Write-Log 'Restored pip check passed' 'OK'
+        }
+
         $dbResult = & $python -c "import sqlite3; c=sqlite3.connect(r'$db'); print(c.execute('pragma integrity_check').fetchone()[0]); c.close()" 2>&1
         if ($LASTEXITCODE -ne 0 -or (($dbResult | Select-Object -Last 1).ToString().Trim() -ne 'ok')) { throw "SQLite integrity check failed: $($dbResult -join ' ')" }
         Write-Log 'Restored SQLite integrity_check: ok' 'OK'
     } finally {
         Pop-Location
     }
+}
+
+function Test-RestoredAssets {
+    $python = Join-Path $LiveRoot '.venv\Scripts\python.exe'
+    $code = @'
+import json, sqlite3, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+db = root / 'data' / 'storymaker_beta.db'
+jobs_root = root / 'data' / 'jobs'
+with sqlite3.connect(db) as con:
+    rows = {r[0]: r for r in con.execute('select beta_job_id,status,progress,result_json from beta_jobs')}
+results = []
+for p in jobs_root.glob('beta_*/result.json'):
+    try:
+        results.append((p.stat().st_mtime, p, json.loads(p.read_text(encoding='utf-8'))))
+    except Exception:
+        pass
+results.sort(reverse=True)
+for _, p, data in results:
+    job_id = p.parent.name
+    assets = data.get('assets') or {}
+    video = assets.get('browser_video') or assets.get('video')
+    if not video:
+        continue
+    video_path = Path(video)
+    if not video_path.exists() or video_path.stat().st_size < 1024:
+        continue
+    if job_id not in rows:
+        raise SystemExit(f'DB row missing for completed asset: {job_id}')
+    db_result = Path(rows[job_id][3])
+    if not db_result.exists():
+        raise SystemExit(f'DB result_json missing: {db_result}')
+    endpoint = f'/beta-api/browser/jobs/{job_id}/file/mp4' if assets.get('browser_video') else f'/beta-api/jobs/{job_id}/file/video'
+    print(f'ASSET_OK|{job_id}|{endpoint}|{video_path.stat().st_size}|{len(rows)}|{len(results)}')
+    raise SystemExit(0)
+raise SystemExit('No verified completed MP4 asset linked to both DB and result.json')
+'@
+    $assetResult = & $python -c $code $LiveRoot 2>&1
+    if ($LASTEXITCODE -ne 0 -or (($assetResult | Select-Object -Last 1).ToString() -notlike 'ASSET_OK|*')) {
+        throw "Restored MP4/archive linkage check failed: $($assetResult -join ' ')"
+    }
+    $parts = ($assetResult | Select-Object -Last 1).ToString().Split('|')
+    $jobId = $parts[1]
+    $endpoint = $parts[2]
+    $response = Invoke-WebRequest -UseBasicParsing ("http://127.0.0.1:8021" + $endpoint) -TimeoutSec 30
+    if ([int]$response.StatusCode -ne 200 -or $response.RawContentLength -lt 1024) { throw "Restored MP4 HTTP check failed: HTTP $($response.StatusCode), bytes=$($response.RawContentLength)" }
+    Write-Log "Restored MP4/archive linkage passed: job=$jobId bytes=$($parts[3]) endpoint=$endpoint" 'OK'
 }
 
 function Start-And-TestRuntime {
@@ -214,7 +279,7 @@ try {
     Write-Host ''
     Write-Host 'Verified PASS snapshots:'
     for ($i=0; $i -lt $snapshots.Count; $i++) {
-        Write-Host (" [{0}] {1}  ({2})" -f ($i+1), $snapshots[$i].Name, $snapshots[$i].Created.ToString('yyyy-MM-dd HH:mm:ss'))
+        Write-Host (" [{0}] [{1}] {2}  ({3})  Git={4}" -f ($i+1), $snapshots[$i].SourceLabel, $snapshots[$i].Name, $snapshots[$i].Created.ToString('yyyy-MM-dd HH:mm:ss'), $snapshots[$i].GitHead.Substring(0, [Math]::Min(12, $snapshots[$i].GitHead.Length)))
     }
     Write-Host ' [0] Cancel'
     Write-Host ''
@@ -251,6 +316,7 @@ try {
         Copy-SnapshotToLive -Snapshot $chosen.Path
         Test-RestoredRuntime
         Start-And-TestRuntime
+        Test-RestoredAssets
         Restore-BetaScheduledTasks
     } catch {
         Write-Log "Restore failed after live folder move: $($_.Exception.Message)" 'ERROR'

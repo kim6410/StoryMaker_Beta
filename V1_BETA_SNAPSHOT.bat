@@ -4,15 +4,27 @@ title StoryMaker Beta Snapshot Restore
 
 if /i "%~1"=="__RUN_FROM_TEMP__" goto RUN_FROM_TEMP
 
-set "TEMP_RESTORE=%TEMP%\StoryMakerBetaRestore"
-if exist "%TEMP_RESTORE%" rmdir /s /q "%TEMP_RESTORE%"
+set "TEMP_RESTORE=%TEMP%\StoryMakerBetaRestore_%RANDOM%_%RANDOM%"
 mkdir "%TEMP_RESTORE%" >nul 2>&1
+if not exist "%TEMP_RESTORE%" (
+    echo Failed to create temporary restore folder.
+    pause
+    exit /b 1
+)
 
-copy /y "%~dp0V1_BETA_SNAPSHOT.ps1" "%TEMP_RESTORE%\V1_BETA_SNAPSHOT.ps1" >nul
-copy /y "%~f0" "%TEMP_RESTORE%\V1_BETA_SNAPSHOT.bat" >nul
+for %%F in (V1_BETA_SNAPSHOT.ps1 V1_BETA_SNAPSHOT.bat V1_BETA_BACKUP.ps1 V1_BETA_BACKUP.bat) do (
+    if exist "%~dp0%%F" copy /y "%~dp0%%F" "%TEMP_RESTORE%\%%F" >nul
+)
 
 if not exist "%TEMP_RESTORE%\V1_BETA_SNAPSHOT.ps1" (
     echo Failed to prepare temporary restore script.
+    pause
+    exit /b 1
+)
+
+fc /b "%~dp0V1_BETA_SNAPSHOT.ps1" "%TEMP_RESTORE%\V1_BETA_SNAPSHOT.ps1" >nul
+if not "%errorlevel%"=="0" (
+    echo Temporary restore script verification failed.
     pause
     exit /b 1
 )

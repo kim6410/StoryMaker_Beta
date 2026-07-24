@@ -569,6 +569,14 @@ if (Test-Path -LiteralPath $betaPython -PathType Leaf) {
         } else {
             Write-Log 'Beta runtime import verification passed' 'OK'
         }
+
+        $pipCheckResult = & $betaPython -m pip check 2>&1
+        $pipCheckResult | Out-File -LiteralPath (Join-Path $RestoreInfo 'pip_check_preflight.txt') -Encoding utf8
+        if ($LASTEXITCODE -ne 0 -or (($pipCheckResult | Out-String) -notmatch 'No broken requirements found')) {
+            Add-BackupWarning "Beta pip check has a recorded dependency mismatch: $($pipCheckResult -join ' ')"
+        } else {
+            Write-Log 'Beta pip check passed' 'OK'
+        }
     }
     catch {
         Add-BackupError "Beta runtime import verification failed: $($_.Exception.Message)"
@@ -813,15 +821,15 @@ $restoreGuideContent = @"
 
 백업 생성 시각: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
 
-원본 경로: `$SourceRoot`
+원본 경로: $SourceRoot
 
-백업 스냅샷: `$Destination`
+백업 스냅샷: $Destination
 
-Git HEAD: `$gitHead`
+Git HEAD: $gitHead
 
-파일 수: `$fileCount`
+파일 수: $fileCount
 
-전체 용량(Byte): `$totalBytes`
+전체 용량(Byte): $totalBytes
 
 ## 백업에 포함된 항목
 
