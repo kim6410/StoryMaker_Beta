@@ -147,8 +147,8 @@
       const audioUrl = assets.browser_audio ? `/beta-api/browser/jobs/${encodeURIComponent(jobId)}/file/mp3` : assets.audio ? `/beta-api/jobs/${encodeURIComponent(jobId)}/file/audio` : '';
       const videoUrl = assets.browser_video ? `/beta-api/browser/jobs/${encodeURIComponent(jobId)}/file/mp4` : assets.video ? `/beta-api/jobs/${encodeURIComponent(jobId)}/file/video` : '';
       const subtitleUrl = assets.subtitle ? `/beta-api/jobs/${encodeURIComponent(jobId)}/file/subtitle` : '';
-      const thumbnailUrl = assets.thumbnail ? `/beta-api/jobs/${encodeURIComponent(jobId)}/file/thumbnail` : (images.length ? `/beta-api/browser/jobs/${encodeURIComponent(jobId)}/image/1` : '');
       const images = assets.images || [];
+      const thumbnailUrl = assets.thumbnail ? `/beta-api/jobs/${encodeURIComponent(jobId)}/file/thumbnail` : (images.length ? `/beta-api/browser/jobs/${encodeURIComponent(jobId)}/image/1` : '');
       detail.innerHTML = `<div class="detail-head"><div><div class="badge">BETA ARCHIVE DETAIL</div><h2>${esc(job.title || 'Beta 제작')}</h2><p>${esc(job.business?.name || '')} · ${esc(job.business?.region || '')} · ${esc(job.business?.service || '')}</p></div><button id="archive-detail-close" type="button">닫기</button></div>
         <section class="detail-block"><h3>SNS 8채널</h3><div class="channel-tabs">${order.map((key, index) => `<button type="button" class="channel-tab${index === 0 ? ' active' : ''}" data-channel="${esc(key)}">${esc(channels[key]?.label || key)}</button>`).join('')}</div><pre id="archive-channel-content" class="channel-content">${esc(channels[first]?.content || '')}</pre></section>
         <div class="archive-sections archive-sections-all">
