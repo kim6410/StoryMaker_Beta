@@ -13,6 +13,7 @@ from app.beta_gemini import beta_gemini_router
 from app.beta_browser import beta_browser_router
 from app.beta_steps import beta_steps_router
 from app.beta_gemini_worker import beta_gemini_worker_router
+from app.beta_shortform import beta_shortform_router
 
 ROOT = Path(r"F:\StoryMaker_beta")
 STATIC_DIR = ROOT / "static"
@@ -33,6 +34,7 @@ app.include_router(beta_gemini_router)
 app.include_router(beta_browser_router)
 app.include_router(beta_steps_router)
 app.include_router(beta_gemini_worker_router)
+app.include_router(beta_shortform_router)
 
 
 def connect_db() -> sqlite3.Connection:

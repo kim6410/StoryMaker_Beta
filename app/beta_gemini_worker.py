@@ -84,6 +84,14 @@ def write_state(state: dict[str, Any]) -> None:
     tmp.replace(STATE_PATH)
 
 
+def validate_worker(worker_id: str) -> None:
+    if worker_id not in ALLOWED_WORKER_IDS:
+        raise HTTPException(
+            status_code=426,
+            detail=f"구형 Beta Worker는 차단되었습니다. {REQUIRED_WORKER_ID}를 설치하세요.",
+        )
+
+
 def valid_job_id(job_id: str) -> bool:
     return bool(job_id.startswith("beta_") and re.fullmatch(r"[A-Za-z0-9_-]+", job_id))
 
@@ -222,11 +230,7 @@ def worker_prompt(job_id: str) -> dict[str, Any]:
 
 @beta_gemini_worker_router.post("/ack")
 def worker_ack(payload: WorkerAck) -> dict[str, Any]:
-    if payload.worker_id not in ALLOWED_WORKER_IDS:
-        raise HTTPException(
-            status_code=426,
-            detail=f"구형 Beta Worker는 차단되었습니다. {REQUIRED_WORKER_ID}를 설치하세요.",
-        )
+    validate_worker(payload.worker_id)
     with LOCK:
         state = read_state()
         if state.get("job_id") != payload.job_id:

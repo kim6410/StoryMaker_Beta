@@ -30,7 +30,9 @@
     renderHandoff: document.getElementById('beta-render-handoff'),
     prepareBrowser: document.getElementById('beta-prepare-browser'),
     openBrowser: document.getElementById('beta-open-browser'),
-    browserLink: document.getElementById('beta-browser-link')
+    browserLink: document.getElementById('beta-browser-link'),
+    shortformIntegrated: document.getElementById('beta-shortform-integrated'),
+    shortformStatus: document.getElementById('beta-shortform-integrated-status')
   };
 
   let betaCurrentJobId = sessionStorage.getItem('storymaker_beta_current_job') || '';
@@ -106,11 +108,27 @@
       <div class="slot-script">${betaEscapeHtml(item.content || '')}</div>`;
   }
 
+  function betaConnectShortform(job) {
+    const content = job?.content || {};
+    const channels = content.channels || {};
+    const ready = Boolean(betaCurrentJobId && (content.podcast_50 || channels.PODCAST_50?.content));
+    if (!betaUi.shortformIntegrated) return;
+    betaUi.shortformIntegrated.hidden = !ready;
+    if (!ready) return;
+    if (betaUi.shortformStatus) betaUi.shortformStatus.textContent = '업체정보·블로그 제목·팟캐스트50·업로드 미디어를 연결했습니다.';
+    if (window.StoryMakerBetaInlineShortform?.loadJob) {
+      window.StoryMakerBetaInlineShortform.loadJob(betaCurrentJobId).catch((error) => {
+        if (betaUi.shortformStatus) betaUi.shortformStatus.textContent = `숏폼 연결 실패: ${error.message}`;
+      });
+    }
+  }
+
   function betaShowContent(job) {
     const content = job.content || {};
     const channels = content.channels || {};
     const order = Array.isArray(content.channel_order) ? content.channel_order : [];
     const readyForRender = order.length === 8 && Boolean(content.podcast_50 || channels.PODCAST_50?.content);
+    betaConnectShortform(job);
     if (betaUi.renderHandoff) betaUi.renderHandoff.hidden = !readyForRender;
     const podcastButton = document.getElementById('mp3');
     if (podcastButton) podcastButton.disabled = !readyForRender;
@@ -325,6 +343,16 @@ ${content.podcast_80 || content.podcast_script || content.script || ''}\r\n\r\n�
       betaSetStatus(`현재 작업 불러오기 실패: ${error.message}`);
     }
   }
+
+  window.addEventListener('message', (event) => {
+    if (event.origin !== location.origin || !event.data) return;
+    if (event.data.type === 'storymaker-beta-shortform-ready') {
+      if (betaUi.shortformStatus) betaUi.shortformStatus.textContent = '현재 작업 데이터와 사용자 기본 설정 연결 완료';
+    }
+    if (event.data.type === 'storymaker-beta-shortform-error') {
+      if (betaUi.shortformStatus) betaUi.shortformStatus.textContent = `숏폼 연결 확인 필요 · ${event.data.error || '알 수 없는 오류'}`;
+    }
+  });
 
   window.addEventListener('storymaker-beta-renderer-ready', () => {
     if (betaCurrentJobId && window.StoryMakerBetaBrowserRenderer) {
