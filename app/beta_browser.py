@@ -5,6 +5,7 @@ from typing import Any
 import json
 import hashlib
 import shutil
+import subprocess
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -29,6 +30,33 @@ def beta_browser_result(job_dir: Path) -> dict[str, Any]:
     if not result_path.exists():
         raise HTTPException(status_code=404, detail="result.json이 없습니다.")
     return json.loads(result_path.read_text(encoding="utf-8"))
+
+
+def beta_browser_video_proxy(job_dir: Path, source: Path, video_index: int) -> Path:
+    proxy_dir = job_dir / "output" / "video_proxy"
+    proxy_dir.mkdir(parents=True, exist_ok=True)
+    target = proxy_dir / f"video_{video_index:03d}_h264.mp4"
+    stamp = proxy_dir / f"video_{video_index:03d}_h264.source"
+    signature = f"{source.resolve()}|{source.stat().st_size}|{source.stat().st_mtime_ns}"
+    if target.exists() and target.stat().st_size > 4096 and stamp.exists() and stamp.read_text(encoding="utf-8", errors="ignore") == signature:
+        return target
+    temp = target.with_suffix(".tmp.mp4")
+    temp.unlink(missing_ok=True)
+    ffmpeg = BETA_ROOT / "tools" / "ffmpeg.exe"
+    command = [
+        str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(source), "-an",
+        "-vf", "fps=30,format=yuv420p",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+        "-movflags", "+faststart", str(temp),
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if completed.returncode != 0 or not temp.exists() or temp.stat().st_size < 4096:
+        temp.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=completed.stderr.strip() or "동영상 H.264 호환 변환에 실패했습니다.")
+    temp.replace(target)
+    stamp.write_text(signature, encoding="utf-8")
+    return target
 
 
 def beta_browser_write_result(job_dir: Path, result: dict[str, Any]) -> None:
@@ -108,7 +136,8 @@ def beta_browser_source_video(beta_job_id: str, video_index: int) -> FileRespons
     path = Path(videos[video_index - 1])
     if not path.exists():
         raise HTTPException(status_code=404, detail="동영상 파일이 없습니다.")
-    return FileResponse(path)
+    proxy = beta_browser_video_proxy(job_dir, path, video_index)
+    return FileResponse(proxy, media_type="video/mp4", filename=proxy.name)
 
 
 @beta_browser_router.get("/jobs/{beta_job_id}/voice-wav")
