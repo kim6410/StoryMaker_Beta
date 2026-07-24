@@ -16,7 +16,7 @@
     subtitleSize: q('sf-subtitle-size'), subtitlePosition: q('sf-subtitle-position'),
     previewBrand: q('sf-preview-brand'), previewTitle: q('sf-preview-title'), previewSubtitle: q('sf-preview-subtitle'),
     previewBusiness: q('sf-preview-business'), previewPhone: q('sf-preview-phone'), status: q('sf-status'), progress: q('sf-progress'),
-    log: q('sf-log'), make: q('sf-make'), saveDefaults: q('sf-save-defaults'), resetDefaults: q('sf-reset-defaults')
+    log: q('sf-log'), make: q('sf-make')
   };
 
   const defaults = {
@@ -77,8 +77,8 @@
   }
 
   function refreshPreview() {
-    fields.previewBrand.textContent = fields.title2.value || '스토리메이커 연구소';
-    fields.previewTitle.textContent = fields.title1.value || '설치 없는 AI 숏폼';
+    fields.previewBrand.textContent = fields.title1.value || '스토리메이커 연구소';
+    fields.previewTitle.textContent = fields.title2.value || '설치 없는 AI 숏폼';
     const firstLine = fields.script.value.split(/\r?\n/).find((line) => line.trim()) || '팟캐스트 50 대사가 이곳에 표시됩니다.';
     fields.previewSubtitle.textContent = firstLine.replace(/^(여자|남자|여성|남성)\s*[:：]\s*/, '');
     fields.previewBusiness.textContent = fields.business.value || '상호명';
@@ -92,9 +92,6 @@
     await request('/beta-api/shortform/settings', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
     });
-    appendLog('상세 설정을 사용자 기본값으로 저장했습니다.');
-    fields.saveDefaults.textContent = '저장 완료';
-    setTimeout(() => fields.saveDefaults.textContent = '내 기본 설정으로 저장', 1200);
   }
 
   function scheduleSave() {
@@ -121,49 +118,56 @@
     appendLog(`이미지 ${data.context.image_count}장 · 동영상 ${data.context.video_count}개`);
   }
 
+  async function waitForRenderer(timeoutMs = 15000) {
+    if (window.StoryMakerBetaBrowserRenderer?.createVideoOnly) return window.StoryMakerBetaBrowserRenderer;
+    return await new Promise((resolve, reject) => {
+      const started = Date.now();
+      let timer = null;
+      const cleanup = () => {
+        if (timer) clearInterval(timer);
+        window.removeEventListener('storymaker-beta-renderer-ready', onReady);
+      };
+      const onReady = () => {
+        if (window.StoryMakerBetaBrowserRenderer?.createVideoOnly) {
+          cleanup();
+          resolve(window.StoryMakerBetaBrowserRenderer);
+        }
+      };
+      timer = setInterval(() => {
+        if (window.StoryMakerBetaBrowserRenderer?.createVideoOnly) {
+          cleanup();
+          resolve(window.StoryMakerBetaBrowserRenderer);
+        } else if (Date.now() - started >= timeoutMs) {
+          cleanup();
+          reject(new Error('브라우저 MP4 렌더러 준비 시간이 초과되었습니다. 화면을 새로고침해 주세요.'));
+        }
+      }, 200);
+      window.addEventListener('storymaker-beta-renderer-ready', onReady);
+      onReady();
+    });
+  }
+
   async function makeVideo() {
     if (!state.jobId) return;
     fields.make.disabled = true;
+    const preview = q('sf-final-video');
     try {
       await saveDefaults();
-      setProgress(8, '팟캐스트50 원고와 상세 설정을 확인하는 중...');
-      appendLog('숏폼 제작을 시작합니다.');
-      await new Promise((r) => setTimeout(r, 300));
-
-      const mp3 = document.getElementById('mp3');
-      const mp4 = document.getElementById('mp4');
-      if (!mp3 || !mp4) throw new Error('기존 브라우저 제작 엔진 버튼을 찾지 못했습니다.');
-
-      setProgress(18, 'TTS 음성·SRT 타이밍을 준비하는 중...');
-      appendLog('기존 Beta 음성·SRT 엔진을 호출합니다.');
-      if (!mp3.disabled) mp3.click();
-
-      for (let i = 0; i < 240; i += 1) {
-        await new Promise((r) => setTimeout(r, 500));
-        const pct = Math.min(58, 20 + Math.floor(i / 6));
-        setProgress(pct, '음성 생성과 자막 타이밍을 계산하는 중...');
-        const audio = document.getElementById('audio');
-        if (audio && !audio.hidden && audio.src) break;
-      }
-
-      setProgress(62, '음악 믹싱과 화면 전환을 준비하는 중...');
-      appendLog('MP3 준비 완료. 브라우저 MP4 렌더링을 시작합니다.');
-      if (!mp4.disabled) mp4.click();
-
-      for (let i = 0; i < 360; i += 1) {
-        await new Promise((r) => setTimeout(r, 500));
-        const pct = Math.min(96, 63 + Math.floor(i / 11));
-        setProgress(pct, `9:16 프레임 렌더링 중 · ${pct}%`);
-        const video = document.getElementById('video');
-        if (video && !video.hidden && video.src) {
-          const preview = q('sf-final-video');
-          preview.src = video.src;
-          preview.hidden = false;
-          break;
-        }
-      }
-      setProgress(100, '완성되었습니다. 결과는 보관함 Beta에 저장됩니다.');
-      appendLog('숏폼 제작 완료 · 보관함 Beta 연결을 확인하세요.');
+      preview.hidden = true;
+      preview.removeAttribute('src');
+      setProgress(8, '팟캐스트50 원고와 설정을 확인하는 중...');
+      appendLog('숏폼 MP4 제작을 시작합니다.');
+      setProgress(12, '브라우저 MP4 렌더러를 준비하는 중...');
+      const renderer = await waitForRenderer();
+      const result = await renderer.createVideoOnly(state.jobId, values(), (percent, message) => {
+        setProgress(percent, message);
+      });
+      preview.src = result.videoUrl;
+      preview.hidden = false;
+      preview.currentTime = 0;
+      preview.play().catch(() => {});
+      setProgress(100, 'MP4 제작과 보관함 Beta 저장이 완료되었습니다.');
+      appendLog(`MP4 저장 완료 · ${result.musicName || '랜덤 배경음악'}`);
     } catch (error) {
       setProgress(0, `제작 실패: ${error.message}`);
       appendLog(`오류 · ${error.message}`);
@@ -173,7 +177,7 @@
   }
 
   root.querySelectorAll('input,textarea,select').forEach((element) => {
-    element.addEventListener('input', refreshPreview);
+    element.addEventListener('input', () => { refreshPreview(); scheduleSave(); });
     element.addEventListener('change', () => { refreshPreview(); scheduleSave(); });
   });
   root.querySelectorAll('[data-accordion]').forEach((button) => {
@@ -184,8 +188,6 @@
     });
   });
   fields.make.addEventListener('click', makeVideo);
-  fields.saveDefaults.addEventListener('click', () => saveDefaults().catch((e) => appendLog(e.message)));
-  fields.resetDefaults.addEventListener('click', () => { applySettings(defaults); refreshPreview(); appendLog('숏폼 기본 설정으로 복원했습니다.'); });
 
   window.StoryMakerBetaInlineShortform = { loadJob };
 })();

@@ -423,9 +423,9 @@ async function loadBetaRenderBrowserShortform() {
   }
 
   async function upload() {
-    if(!manifest || !mp3Blob || !mp4Blob) throw new Error('MP3와 MP4를 모두 먼저 생성하세요.');
+    if(!manifest || !mp4Blob) throw new Error('MP4를 먼저 생성하세요.');
     const body=new FormData();
-    body.append('browser_mp3',mp3Blob,'browser_podcast.mp3');
+    if (mp3Blob) body.append('browser_mp3',mp3Blob,'browser_podcast.mp3');
     body.append('browser_mp4',mp4Blob,'browser_final.mp4');
     body.append('diagnostics',JSON.stringify(refreshDiag()));
     const data=await request(`/beta-api/browser/jobs/${manifest.beta_job_id}/upload`,{method:'POST',body});
@@ -521,6 +521,25 @@ async function loadBetaRenderBrowserShortform() {
       ui.status.textContent=nextJobId?'현재 작업의 PODCAST_50 음성을 새로 만들 준비가 됐습니다.':'작업을 준비 중입니다.';
     },
     loadJob: () => loadJob(),
+    async createVideoOnly(jobId, settings = {}, onProgress = () => {}) {
+      ui.job.value = String(jobId || '');
+      manifest = null; mp3Blob = null; mp4Blob = null; subtitles = [];
+      onProgress(12, 'TTS 음성과 SRT 타이밍을 준비하는 중...');
+      await ensurePodcastReady();
+      onProgress(38, '랜덤 배경음악을 선택하고 음성과 믹싱하는 중...');
+      const prepared = await request(`/beta-api/shortform/jobs/${encodeURIComponent(jobId)}/prepare-audio`, {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(settings)
+      });
+      await loadJob();
+      onProgress(52, '이미지·동영상과 화면 전환을 준비하는 중...');
+      await renderMp4();
+      onProgress(96, 'MP4를 보관함 Beta에 저장하는 중...');
+      const body = new FormData();
+      body.append('browser_mp4', mp4Blob, 'browser_final.mp4');
+      body.append('diagnostics', JSON.stringify(refreshDiag()));
+      await request(`/beta-api/browser/jobs/${encodeURIComponent(jobId)}/upload`, {method:'POST', body});
+      return { videoUrl: URL.createObjectURL(mp4Blob), musicName: prepared.music_name || manifest?.music_name || '' };
+    },
     refreshDiag: () => refreshDiag()
   };
   window.dispatchEvent(new CustomEvent('storymaker-beta-renderer-ready'));

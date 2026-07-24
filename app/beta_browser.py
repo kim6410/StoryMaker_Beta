@@ -76,10 +76,11 @@ def beta_browser_manifest(beta_job_id: str) -> JSONResponse:
         "voice_script_hash": result.get("assets", {}).get("voice_script_hash"),
         "images": [f"/beta-api/browser/jobs/{beta_job_id}/image/{index}" for index in range(1, len(images) + 1)],
         "videos": [f"/beta-api/browser/jobs/{beta_job_id}/video/{index}" for index in range(1, len(videos) + 1)],
-        "voice_wav": f"/beta-api/browser/jobs/{beta_job_id}/voice-wav" if (output / "voice.wav").exists() else None,
+        "voice_wav": (f"/beta-api/shortform/jobs/{beta_job_id}/mixed-audio" if (output / "shortform" / "mixed_voice_music.wav").exists() else (f"/beta-api/browser/jobs/{beta_job_id}/voice-wav" if (output / "voice.wav").exists() else None)),
         "music": f"/beta-api/browser/jobs/{beta_job_id}/music" if result.get("assets", {}).get("music") else None,
         "subtitle": f"/beta-api/browser/jobs/{beta_job_id}/subtitle" if (output / "subtitle.srt").exists() else None,
-        "music_volume": 0.10,
+        "music_volume": float((result.get("shortform") or {}).get("bgm_volume", 0.15) or 0.15),
+        "music_name": (result.get("shortform") or {}).get("music_name"),
     }
     return JSONResponse({"ok": True, "manifest": manifest})
 

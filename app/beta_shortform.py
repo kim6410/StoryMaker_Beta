@@ -6,6 +6,8 @@ from typing import Any
 import hashlib
 import json
 import re
+import random
+import subprocess
 import shutil
 import sqlite3
 
@@ -142,8 +144,8 @@ def shortform_context(job_id: str, request: Request) -> JSONResponse:
             pass
     payload = {
         "job_id": job_id,
-        "title_line_1": compact_title(blog_title or result.get("title") or "StoryMaker Beta"),
-        "title_line_2": business.get("name") or "StoryMaker Beta",
+        "title_line_1": business.get("name") or "StoryMaker Beta",
+        "title_line_2": compact_title(blog_title or result.get("title") or "StoryMaker Beta"),
         "business_name": business.get("name") or "",
         "business_phone": business.get("phone") or "",
         "script": script,
@@ -222,3 +224,45 @@ async def save_shortform_result(
     write_json(result_path, result)
     (output / "settings.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     return JSONResponse({"ok": True, "saved": saved, "shortform": result["shortform"]})
+
+
+@beta_shortform_router.post("/jobs/{job_id}/prepare-audio")
+async def prepare_shortform_audio(job_id: str, request: Request) -> JSONResponse:
+    job_dir = safe_job_dir(job_id)
+    payload = await request.json()
+    output = job_dir / "output"
+    voice = output / "voice.wav"
+    if not voice.exists():
+        raise HTTPException(status_code=409, detail="먼저 PODCAST_50 음성을 준비해야 합니다.")
+    music_candidates = []
+    for folder in (ROOT / "data" / "music", ROOT / "media" / "music", ROOT / "data"):
+        if folder.exists():
+            music_candidates.extend(p for p in folder.glob("*") if p.suffix.lower() in {".mp3", ".wav", ".m4a", ".aac"} and "voice" not in p.name.lower())
+    if not music_candidates:
+        raise HTTPException(status_code=404, detail="Beta 랜덤 배경음악 파일이 없습니다.")
+    result_path = job_dir / "result.json"
+    result = read_json(result_path)
+    previous = str((result.get("shortform") or {}).get("selected_music") or "")
+    selected = Path(previous) if previous and Path(previous).exists() else random.choice(music_candidates)
+    volume = max(0.0, min(float(payload.get("bgm_volume", 0.15) or 0.15), 0.5))
+    shortform_dir = output / "shortform"
+    shortform_dir.mkdir(parents=True, exist_ok=True)
+    mixed = shortform_dir / "mixed_voice_music.wav"
+    ffmpeg = ROOT / "tools" / "ffmpeg.exe"
+    command = [str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y", "-i", str(voice), "-stream_loop", "-1", "-i", str(selected), "-filter_complex", f"[1:a]volume={volume},afade=t=in:st=0:d=0.5[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[a]", "-map", "[a]", "-c:a", "pcm_s16le", str(mixed)]
+    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if completed.returncode != 0 or not mixed.exists() or mixed.stat().st_size < 1024:
+        raise HTTPException(status_code=500, detail=completed.stderr.strip() or "배경음악 믹싱 실패")
+    result.setdefault("shortform", {}).update({"selected_music": str(selected), "music_name": selected.name, "bgm_volume": volume, "mixed_audio": str(mixed)})
+    result.setdefault("assets", {})["shortform_mixed_audio"] = str(mixed)
+    write_json(result_path, result)
+    return JSONResponse({"ok": True, "audio_url": f"/beta-api/shortform/jobs/{job_id}/mixed-audio", "music_name": selected.name})
+
+
+@beta_shortform_router.get("/jobs/{job_id}/mixed-audio")
+def shortform_mixed_audio(job_id: str):
+    from fastapi.responses import FileResponse
+    path = safe_job_dir(job_id) / "output" / "shortform" / "mixed_voice_music.wav"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="믹싱 오디오가 없습니다.")
+    return FileResponse(path, media_type="audio/wav")
