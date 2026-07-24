@@ -25,12 +25,12 @@ beta_shortform_router = APIRouter(prefix="/beta-api/shortform", tags=["beta-shor
 DEFAULT_SETTINGS: dict[str, Any] = {
     "female_voice": "random",
     "male_voice": "random",
-    "voice_speed": 1.35,
+    "voice_speed": 1.25,
     "voice_volume": 0.8,
     "bgm_mode": "shuffle",
     "bgm_file": "",
     "bgm_mood": "random",
-    "bgm_volume": 0.15,
+    "bgm_volume": 0.10,
     "fps": 24,
     "transition_type": "random",
     "transition_duration": 0.45,
@@ -259,6 +259,34 @@ async def save_shortform_result(
     write_json(result_path, result)
     (output / "settings.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     return JSONResponse({"ok": True, "saved": saved, "shortform": result["shortform"]})
+
+
+@beta_shortform_router.post("/jobs/{job_id}/reset-generated")
+def reset_generated_assets(job_id: str) -> JSONResponse:
+    job_dir = safe_job_dir(job_id)
+    output = job_dir / "output"
+    targets = [
+        output / "voice.wav", output / "voice.mp3", output / "subtitle.srt",
+        output / "dialogue_segments.json", output / "shortform" / "mixed_voice_music.wav",
+        output / "browser" / "browser_podcast.mp3", output / "browser" / "browser_final.mp4",
+        output / "browser" / "diagnostics.json",
+    ]
+    for target in targets:
+        target.unlink(missing_ok=True)
+    parts = output / "dialogue_parts"
+    if parts.exists():
+        shutil.rmtree(parts, ignore_errors=True)
+    result_path = job_dir / "result.json"
+    result = read_json(result_path)
+    assets = result.setdefault("assets", {})
+    for key in ("audio", "subtitle", "voice_script_hash", "shortform_mixed_audio", "browser_audio", "browser_video"):
+        assets.pop(key, None)
+    shortform = result.setdefault("shortform", {})
+    for key in ("selected_music", "music_name", "mixed_audio", "voice_duration", "final_audio_duration", "saved_at"):
+        shortform.pop(key, None)
+    result.pop("browser_render", None)
+    write_json(result_path, result)
+    return JSONResponse({"ok": True, "reset": True})
 
 
 @beta_shortform_router.post("/jobs/{job_id}/prepare-audio")

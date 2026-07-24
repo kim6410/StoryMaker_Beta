@@ -324,10 +324,10 @@ async function loadBetaRenderBrowserShortform() {
     });
   }
 
-  async function extractVideoFrameFiles(url, videoIndex) {
+  async function extractVideoFrameFiles(url, videoIndex, requestedCount = 5) {
     const video = await loadVideo(url);
     const duration = Math.max(0.1, Number(video.duration || 0.1));
-    const sampleCount = Math.max(2, Math.min(5, Math.ceil(duration / 2)));
+    const sampleCount = Math.max(2, Math.min(90, Math.round(requestedCount || 5)));
     const canvas = document.createElement('canvas');
     canvas.width = 720;
     canvas.height = 1280;
@@ -359,17 +359,35 @@ async function loadBetaRenderBrowserShortform() {
       throw new Error('이 브라우저는 WebCodecs H.264/AAC 인코딩을 지원하지 않습니다.');
     }
 
-    const imageFiles = [];
+    const sourceImages = [];
     for (let index = 0; index < manifest.images.length; index += 1) {
-      imageFiles.push(await fetchAsFile(manifest.images[index], `image_${String(index + 1).padStart(3, '0')}.jpg`, 'image/jpeg'));
+      sourceImages.push(await fetchAsFile(manifest.images[index], `image_${String(index + 1).padStart(3, '0')}.jpg`, 'image/jpeg'));
       setProgress('slideshow', 5 + ((index + 1) / Math.max(1, manifest.images.length)) * 10);
     }
 
     const videoUrls = manifest.videos || [];
+    const estimatedDuration = Math.max(12, Number(manifest.duration_seconds || 45));
+    const totalSlots = Math.max(sourceImages.length + (videoUrls.length ? 3 : 0), Math.ceil(estimatedDuration / 1.15));
+    const targetVideoSlots = videoUrls.length ? Math.max(videoUrls.length * 2, Math.round(totalSlots * 0.30)) : 0;
+    const targetImageSlots = Math.max(sourceImages.length, totalSlots - targetVideoSlots);
+    const imageFiles = [];
+    for (let i = 0; i < targetImageSlots && sourceImages.length; i += 1) imageFiles.push(sourceImages[i % sourceImages.length]);
+    const videoFrames = [];
     for (let index = 0; index < videoUrls.length; index += 1) {
-      const frames = await extractVideoFrameFiles(videoUrls[index], index);
-      imageFiles.push(...frames);
+      const count = Math.max(2, Math.round(targetVideoSlots / videoUrls.length));
+      const frames = await extractVideoFrameFiles(videoUrls[index], index, count);
+      videoFrames.push(...frames);
       setProgress('slideshow', 15 + ((index + 1) / Math.max(1, videoUrls.length)) * 8);
+    }
+    for (let i = videoFrames.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [videoFrames[i], videoFrames[j]] = [videoFrames[j], videoFrames[i]];
+    }
+    for (const frame of videoFrames.slice(0, targetVideoSlots)) {
+      const min = Math.min(imageFiles.length, 1);
+      const max = Math.max(min, imageFiles.length - 1);
+      const position = min + Math.floor(Math.random() * Math.max(1, max - min + 1));
+      imageFiles.splice(position, 0, frame);
     }
 
     if (!imageFiles.length) throw new Error('렌더링할 이미지 또는 동영상 프레임이 없습니다.');
@@ -530,9 +548,10 @@ async function loadBetaRenderBrowserShortform() {
     async createVideoOnly(jobId, settings = {}, onProgress = () => {}) {
       ui.job.value = String(jobId || '');
       manifest = null; mp3Blob = null; mp4Blob = null; subtitles = [];
-      onProgress(12, 'TTS 음성과 SRT 타이밍을 준비하는 중...');
+      await request(`/beta-api/shortform/jobs/${encodeURIComponent(jobId)}/reset-generated`, {method:'POST'});
+      onProgress(12, '현재 설정으로 TTS 음성과 SRT를 새로 만드는 중...');
       await ensurePodcastReady(settings);
-      onProgress(38, '랜덤 배경음악을 선택하고 음성과 믹싱하는 중...', {type:'media', images:[...(manifest?.images || [])], videos:[...(manifest?.videos || [])]});
+      onProgress(36, '새 랜덤 배경음악을 선택하고 음성과 믹싱하는 중...', {type:'media', images:[...(manifest?.images || [])], videos:[...(manifest?.videos || [])]});
       let prepared;
       if (settings.bgm_mode === 'one_time' && settings.one_time_music_file) {
         const form = new FormData();
@@ -540,22 +559,26 @@ async function loadBetaRenderBrowserShortform() {
         form.append('bgm_file_upload', settings.one_time_music_file, settings.one_time_music_file.name);
         prepared = await request(`/beta-api/shortform/jobs/${encodeURIComponent(jobId)}/prepare-audio`, {method:'POST', body:form});
       } else {
-        prepared = await request(`/beta-api/shortform/jobs/${encodeURIComponent(jobId)}/prepare-audio`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(settings)});
+        prepared = await request(`/beta-api/shortform/jobs/${encodeURIComponent(jobId)}/prepare-audio`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({...settings, force_new_music:true})});
       }
       await loadJob();
-      onProgress(46, `음악 선택 완료 · ${prepared.music_name || '랜덤 배경음악'}`, {type:'music', musicName:prepared.music_name || ''});
-      onProgress(52, '이미지·동영상과 화면 전환을 준비하는 중...');
-      await renderMp4((detail) => {
-        if (detail.type === 'render') onProgress(52 + Math.max(0, Math.min(100, Number(detail.rawPercent || 0))) * 0.43, `${detail.stage || 'MP4 렌더링'} · ${Math.round(detail.rawPercent || 0)}%`, detail);
-        if (detail.type === 'complete') onProgress(95, 'MP4 Blob 생성 완료', detail);
+      onProgress(45, `음악 선택 완료 · ${prepared.music_name || '음악 없음'}`, {type:'music', musicName:prepared.music_name || ''});
+      await encodeMp3();
+      onProgress(51, '이미지와 동영상 30% 구간을 무작위 배치하는 중...');
+      await renderMp4(settings, (detail) => {
+        if (detail.type === 'render') onProgress(51 + Math.max(0, Math.min(100, Number(detail.rawPercent || 0))) * 0.47, `${detail.stage || 'MP4 렌더링'} · ${Math.round(detail.rawPercent || 0)}%`, detail);
+        if (detail.type === 'complete') onProgress(98, 'MP4 제작 완료 · 보관함 저장 대기', detail);
       });
-      onProgress(96, 'MP4를 보관함 Beta에 저장하는 중...');
+      onProgress(100, 'MP4 제작 완료 · 보관함 바로가기를 누르면 저장됩니다.', {type:'ready'});
+      return { videoUrl: URL.createObjectURL(mp4Blob), musicName: prepared.music_name || manifest?.music_name || '' };
+    },
+    async saveCurrentToArchive(jobId) {
+      if (!mp4Blob || !mp3Blob) throw new Error('먼저 영상 만들기를 완료해 주세요.');
       const body = new FormData();
+      body.append('browser_mp3', mp3Blob, 'browser_podcast.mp3');
       body.append('browser_mp4', mp4Blob, 'browser_final.mp4');
       body.append('diagnostics', JSON.stringify(refreshDiag()));
-      await request(`/beta-api/browser/jobs/${encodeURIComponent(jobId)}/upload`, {method:'POST', body});
-      onProgress(100, 'MP4 제작과 보관함 저장 완료', {type:'saved'});
-      return { videoUrl: URL.createObjectURL(mp4Blob), musicName: prepared.music_name || manifest?.music_name || '' };
+      return await request(`/beta-api/browser/jobs/${encodeURIComponent(jobId)}/upload`, {method:'POST', body});
     },
     refreshDiag: () => refreshDiag()
   };

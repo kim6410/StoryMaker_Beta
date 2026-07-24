@@ -5,7 +5,7 @@
   if (!root) return;
 
   const q = (id) => document.getElementById(id);
-  const state = { jobId: '', context: null, settings: null, timer: null, sceneTimer: null, mediaUrls: [], mediaNames: [], sceneIndex: 0, startedAt: 0, lastProgress: 0 };
+  const state = { jobId: '', context: null, settings: null, timer: null, sceneTimer: null, mediaUrls: [], mediaNames: [], sceneIndex: 0, startedAt: 0, lastProgress: 0, readyToSave: false, saving: false };
 
   const fields = {
     title1: q('sf-title-1'), title2: q('sf-title-2'), business: q('sf-business'), phone: q('sf-phone'),
@@ -20,9 +20,9 @@
   };
 
   const defaults = {
-    female_voice: 'random', male_voice: 'random', voice_speed: 1.35, voice_volume: 0.8,
+    female_voice: 'random', male_voice: 'random', voice_speed: 1.25, voice_volume: 0.8,
     brand_size: 46, phone_size: 43, bottom_margin: 80, fps: 24,
-    transition_type: 'random', bgm_mode: 'shuffle', bgm_file: '', bgm_volume: 0.15,
+    transition_type: 'random', bgm_mode: 'shuffle', bgm_file: '', bgm_volume: 0.10,
     subtitle_size: 30, subtitle_position: 'bottom'
   };
 
@@ -209,13 +209,20 @@
   async function makeVideo() {
     if (!state.jobId) return;
     fields.make.disabled = true;
+    state.readyToSave = false;
     const preview = fields.finalVideo;
+    const phone = preview?.closest('.sf-phone');
     try {
       await saveDefaults();
+      stopScenePreview();
+      preview.pause();
       preview.hidden = true;
       preview.removeAttribute('src');
+      preview.load();
+      preview.volume = 0.8;
+      phone?.classList.remove('has-final');
       setProgress(8, '팟캐스트50 원고와 설정을 확인하는 중...');
-      state.startedAt = performance.now(); state.mediaUrls = []; state.mediaNames = []; state.sceneIndex = 0; fields.log.textContent = ''; appendLog('MP4 제작 시작');
+      state.startedAt = performance.now(); state.mediaUrls = []; state.mediaNames = []; state.sceneIndex = 0; fields.log.textContent = ''; appendLog('MP4 새 제작 시작 · 이전 생성물 초기화');
       setProgress(12, '브라우저 MP4 렌더러를 준비하는 중...');
       const renderer = await waitForRenderer();
       const currentValues = values();
@@ -226,15 +233,44 @@
       });
       preview.src = result.videoUrl;
       preview.hidden = false;
+      preview.volume = 0.8;
       preview.currentTime = 0;
+      phone?.classList.add('has-final');
+      state.readyToSave = true;
+      stopScenePreview();
+      setProgress(100, 'MP4 제작 완료 · 보관함 바로가기를 누르면 저장됩니다.');
+      appendLog(`브라우저 제작 완료 · ${result.musicName || '음악 없음'} · 아직 서버에 저장되지 않음`);
+      if (fields.sceneBadge) fields.sceneBadge.textContent = '제작 완료 · Play로 확인하세요';
       preview.play().catch(() => {});
-      setProgress(100, 'MP4 제작과 보관함 Beta 저장이 완료되었습니다.');
-      stopScenePreview(); appendLog(`MP4 저장 완료 · ${result.musicName || '랜덤 배경음악'}`); if (fields.sceneBadge) fields.sceneBadge.textContent = '제작 완료 · Play로 확인하세요';
     } catch (error) {
+      state.readyToSave = false;
       setProgress(0, `제작 실패: ${error.message}`);
       appendLog(`오류 · ${error.message}`);
     } finally {
       fields.make.disabled = false;
+    }
+  }
+
+  async function saveAndOpenArchive(event) {
+    event?.preventDefault();
+    if (!state.readyToSave || state.saving) {
+      if (!state.readyToSave) appendLog('보관함 저장 대기 · 먼저 영상 만들기를 완료해 주세요.');
+      return;
+    }
+    state.saving = true;
+    fields.archive.setAttribute('aria-disabled','true');
+    try {
+      fields.status.textContent = 'MP3·MP4를 보관함 Beta에 저장하는 중...';
+      const renderer = await waitForRenderer();
+      await renderer.saveCurrentToArchive(state.jobId);
+      appendLog('MP3·MP4 서버 저장 성공 · 보관함으로 이동');
+      location.href = '/beta/archive';
+    } catch (error) {
+      appendLog(`보관함 저장 실패 · ${error.message}`);
+      fields.status.textContent = `보관함 저장 실패: ${error.message}`;
+    } finally {
+      state.saving = false;
+      fields.archive.removeAttribute('aria-disabled');
     }
   }
 
@@ -252,6 +288,7 @@
   fields.make.addEventListener('click', makeVideo);
   fields.play?.addEventListener('click', () => { if (fields.finalVideo?.src) fields.finalVideo.play().catch(() => {}); else startScenePreview(); });
   fields.stop?.addEventListener('click', () => { fields.finalVideo?.pause(); stopScenePreview(); });
+  fields.archive?.addEventListener('click', saveAndOpenArchive);
 
   window.StoryMakerBetaInlineShortform = { loadJob };
 })();

@@ -93,6 +93,22 @@ def split_dialogue(script: str) -> list[dict[str, str]]:
     return segments
 
 
+DIGIT_KO = {"0":"공", "1":"일", "2":"이", "3":"삼", "4":"사", "5":"오", "6":"육", "7":"칠", "8":"팔", "9":"구"}
+
+def phone_numbers_for_tts(text: str) -> str:
+    pattern = re.compile(r"(?<!\d)(?:0\d{1,2}[- ]?\d{3,4}[- ]?\d{4})(?!\d)")
+    def convert(match: re.Match[str]) -> str:
+        digits = re.sub(r"\D", "", match.group(0))
+        if len(digits) == 11:
+            groups = (digits[:3], digits[3:7], digits[7:])
+        elif len(digits) == 10:
+            groups = (digits[:3], digits[3:6], digits[6:]) if digits.startswith("010") else (digits[:2], digits[2:6], digits[6:])
+        else:
+            groups = (digits,)
+        return ", ".join("".join(DIGIT_KO[d] for d in group) for group in groups)
+    return pattern.sub(convert, text)
+
+
 def request_supertonic(text: str, voice: str, speed: float = 1.05) -> bytes:
     payload = json.dumps(
         {
@@ -208,7 +224,7 @@ async def create_supertonic_voice(job_id: str, request: Request) -> JSONResponse
     try:
         for index, segment in enumerate(segments, start=1):
             segment["voice"] = female_voice if str(segment.get("voice", "")).upper().startswith("F") else male_voice
-            audio = request_supertonic(segment["text"], segment["voice"], speed)
+            audio = request_supertonic(phone_numbers_for_tts(segment["text"]), segment["voice"], speed)
             part_path = parts_dir / f"{index:03d}_{segment['voice']}.wav"
             part_path.write_bytes(audio)
             segment["duration"] = round(probe_duration(part_path), 3)
