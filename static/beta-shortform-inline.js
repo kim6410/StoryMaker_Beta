@@ -5,7 +5,7 @@
   if (!root) return;
 
   const q = (id) => document.getElementById(id);
-  const state = { jobId: '', context: null, settings: null, timer: null };
+  const state = { jobId: '', context: null, settings: null, timer: null, sceneTimer: null, mediaUrls: [], mediaNames: [], sceneIndex: 0, startedAt: 0, lastProgress: 0 };
 
   const fields = {
     title1: q('sf-title-1'), title2: q('sf-title-2'), business: q('sf-business'), phone: q('sf-phone'),
@@ -16,7 +16,7 @@
     subtitleSize: q('sf-subtitle-size'), subtitlePosition: q('sf-subtitle-position'),
     previewBrand: q('sf-preview-brand'), previewTitle: q('sf-preview-title'), previewSubtitle: q('sf-preview-subtitle'),
     previewBusiness: q('sf-preview-business'), previewPhone: q('sf-preview-phone'), status: q('sf-status'), progress: q('sf-progress'),
-    log: q('sf-log'), make: q('sf-make')
+    log: q('sf-log'), make: q('sf-make'), liveImage: q('sf-live-image'), sceneBadge: q('sf-scene-badge'), play: q('sf-play'), stop: q('sf-stop'), archive: q('sf-archive'), finalVideo: q('sf-final-video'), wave: q('sf-wave')
   };
 
   const defaults = {
@@ -40,8 +40,56 @@
   }
 
   function setProgress(value, message) {
-    fields.progress.style.width = `${Math.max(0, Math.min(100, value))}%`;
+    const safe = Math.max(0, Math.min(100, Number(value) || 0));
+    state.lastProgress = safe;
+    fields.progress.style.width = `${safe}%`;
     fields.status.textContent = message;
+    if (fields.wave) fields.wave.hidden = safe >= 100 || safe <= 0;
+  }
+
+  function mediaName(url, index) {
+    try { return decodeURIComponent(new URL(url, location.href).pathname.split('/').pop()) || `미디어 ${index + 1}`; } catch { return `미디어 ${index + 1}`; }
+  }
+
+  function showScene(index) {
+    if (!state.mediaUrls.length || !fields.liveImage) return;
+    state.sceneIndex = Math.max(0, Math.min(state.mediaUrls.length - 1, index));
+    const url = state.mediaUrls[state.sceneIndex];
+    fields.liveImage.classList.remove('active');
+    fields.liveImage.src = url;
+    fields.liveImage.hidden = false;
+    requestAnimationFrame(() => fields.liveImage.classList.add('active'));
+    const name = state.mediaNames[state.sceneIndex] || mediaName(url, state.sceneIndex);
+    if (fields.sceneBadge) fields.sceneBadge.textContent = `장면 ${state.sceneIndex + 1}/${state.mediaUrls.length} · ${name}`;
+  }
+
+  function startScenePreview() {
+    clearInterval(state.sceneTimer);
+    if (!state.mediaUrls.length) return;
+    showScene(0);
+    state.sceneTimer = setInterval(() => showScene((state.sceneIndex + 1) % state.mediaUrls.length), 2600);
+  }
+
+  function stopScenePreview() { clearInterval(state.sceneTimer); state.sceneTimer = null; }
+
+  function detailLog(detail = {}) {
+    if (detail.type === 'media') {
+      state.mediaUrls = [...(detail.images || [])];
+      state.mediaNames = state.mediaUrls.map(mediaName);
+      appendLog(`미디어 분석 완료 · 이미지 ${detail.images?.length || 0}장 · 동영상 ${detail.videos?.length || 0}개`);
+      state.mediaNames.forEach((name, index) => appendLog(`이미지 ${String(index + 1).padStart(2, '0')} · ${name}`));
+      startScenePreview();
+      return;
+    }
+    if (detail.type === 'music') appendLog(`음악 선택 · ${detail.musicName || '랜덤 배경음악'}`);
+    if (detail.type === 'render') {
+      const scene = state.mediaUrls.length ? Math.min(state.mediaUrls.length, Math.max(1, Math.ceil((detail.rawPercent || 0) / 100 * state.mediaUrls.length))) : 0;
+      if (scene) showScene(scene - 1);
+      const elapsed = Math.max(0, (performance.now() - state.startedAt) / 1000);
+      appendLog(`${detail.stage || 'MP4 렌더링'} · ${Math.round(detail.rawPercent || 0)}% · 장면 ${scene || '-'}/${state.mediaUrls.length || '-'} · 경과 ${elapsed.toFixed(1)}초${detail.remaining ? ` · 약 ${Math.ceil(detail.remaining)}초 남음` : ''}`);
+    }
+    if (detail.type === 'complete') appendLog(`MP4 Blob 생성 · ${(detail.size / 1024 / 1024).toFixed(2)}MB · ${detail.seconds.toFixed(1)}초`);
+    if (detail.type === 'saved') appendLog('서버 저장 완료 · 보관함 Beta 연결 가능');
   }
 
   function values() {
@@ -150,24 +198,25 @@
   async function makeVideo() {
     if (!state.jobId) return;
     fields.make.disabled = true;
-    const preview = q('sf-final-video');
+    const preview = fields.finalVideo;
     try {
       await saveDefaults();
       preview.hidden = true;
       preview.removeAttribute('src');
       setProgress(8, '팟캐스트50 원고와 설정을 확인하는 중...');
-      appendLog('숏폼 MP4 제작을 시작합니다.');
+      state.startedAt = performance.now(); state.mediaUrls = []; state.mediaNames = []; state.sceneIndex = 0; fields.log.textContent = ''; appendLog('MP4 제작 시작');
       setProgress(12, '브라우저 MP4 렌더러를 준비하는 중...');
       const renderer = await waitForRenderer();
-      const result = await renderer.createVideoOnly(state.jobId, values(), (percent, message) => {
+      const result = await renderer.createVideoOnly(state.jobId, values(), (percent, message, detail) => {
         setProgress(percent, message);
+        if (detail) detailLog(detail);
       });
       preview.src = result.videoUrl;
       preview.hidden = false;
       preview.currentTime = 0;
       preview.play().catch(() => {});
       setProgress(100, 'MP4 제작과 보관함 Beta 저장이 완료되었습니다.');
-      appendLog(`MP4 저장 완료 · ${result.musicName || '랜덤 배경음악'}`);
+      stopScenePreview(); appendLog(`MP4 저장 완료 · ${result.musicName || '랜덤 배경음악'}`); if (fields.sceneBadge) fields.sceneBadge.textContent = '제작 완료 · Play로 확인하세요';
     } catch (error) {
       setProgress(0, `제작 실패: ${error.message}`);
       appendLog(`오류 · ${error.message}`);
@@ -188,6 +237,8 @@
     });
   });
   fields.make.addEventListener('click', makeVideo);
+  fields.play?.addEventListener('click', () => { if (fields.finalVideo?.src) fields.finalVideo.play().catch(() => {}); else startScenePreview(); });
+  fields.stop?.addEventListener('click', () => { fields.finalVideo?.pause(); stopScenePreview(); });
 
   window.StoryMakerBetaInlineShortform = { loadJob };
 })();

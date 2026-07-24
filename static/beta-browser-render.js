@@ -352,7 +352,7 @@ async function loadBetaRenderBrowserShortform() {
     return files;
   }
 
-  async function renderMp4() {
+  async function renderMp4(detailCallback = null) {
     startPreparingProgress('slideshow', 2, 20);
     refreshDiag();
     if (!('VideoEncoder' in window) || !('AudioEncoder' in window)) {
@@ -411,6 +411,7 @@ async function loadBetaRenderBrowserShortform() {
         const elapsed = Math.max(0.1, (performance.now() - startedAt) / 1000);
         const remaining = raw > 1 ? Math.max(0, elapsed * (100 - raw) / raw) : 0;
         ui.status.textContent = `${progress?.stage || '고속 MP4 제작 중'} · ${Math.round(raw)}%${remaining ? ` · 약 ${Math.ceil(remaining)}초 남음` : ''}`;
+        detailCallback?.({type:'render', rawPercent:raw, stage:progress?.stage || '고속 MP4 제작 중', remaining});
       }
     });
 
@@ -419,6 +420,7 @@ async function loadBetaRenderBrowserShortform() {
     ui.video.src=URL.createObjectURL(mp4Blob);ui.video.hidden=false;ui.video.controls=true;ui.upload.disabled=!mp3Blob;
     ui.video.scrollIntoView({behavior:'smooth',block:'nearest'});
     setProgress('slideshow', 100, 'complete');
+    detailCallback?.({type:'complete', size:mp4Blob.size, seconds:(performance.now()-startedAt)/1000});
     ui.status.textContent=`슬라이드쇼 생성 완료 · Mediabunny/WebCodecs · ${(mp4Blob.size/1024/1024).toFixed(2)}MB · ${((performance.now()-startedAt)/1000).toFixed(1)}초`;
   }
 
@@ -526,18 +528,23 @@ async function loadBetaRenderBrowserShortform() {
       manifest = null; mp3Blob = null; mp4Blob = null; subtitles = [];
       onProgress(12, 'TTS 음성과 SRT 타이밍을 준비하는 중...');
       await ensurePodcastReady();
-      onProgress(38, '랜덤 배경음악을 선택하고 음성과 믹싱하는 중...');
+      onProgress(38, '랜덤 배경음악을 선택하고 음성과 믹싱하는 중...', {type:'media', images:[...(manifest?.images || [])], videos:[...(manifest?.videos || [])]});
       const prepared = await request(`/beta-api/shortform/jobs/${encodeURIComponent(jobId)}/prepare-audio`, {
         method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(settings)
       });
       await loadJob();
+      onProgress(46, `음악 선택 완료 · ${prepared.music_name || '랜덤 배경음악'}`, {type:'music', musicName:prepared.music_name || ''});
       onProgress(52, '이미지·동영상과 화면 전환을 준비하는 중...');
-      await renderMp4();
+      await renderMp4((detail) => {
+        if (detail.type === 'render') onProgress(52 + Math.max(0, Math.min(100, Number(detail.rawPercent || 0))) * 0.43, `${detail.stage || 'MP4 렌더링'} · ${Math.round(detail.rawPercent || 0)}%`, detail);
+        if (detail.type === 'complete') onProgress(95, 'MP4 Blob 생성 완료', detail);
+      });
       onProgress(96, 'MP4를 보관함 Beta에 저장하는 중...');
       const body = new FormData();
       body.append('browser_mp4', mp4Blob, 'browser_final.mp4');
       body.append('diagnostics', JSON.stringify(refreshDiag()));
       await request(`/beta-api/browser/jobs/${encodeURIComponent(jobId)}/upload`, {method:'POST', body});
+      onProgress(100, 'MP4 제작과 보관함 저장 완료', {type:'saved'});
       return { videoUrl: URL.createObjectURL(mp4Blob), musicName: prepared.music_name || manifest?.music_name || '' };
     },
     refreshDiag: () => refreshDiag()
