@@ -503,3 +503,57 @@ Beta의 개발 자유는 V1의 안정성을 해치지 않는 범위에서만 허
 마지막 갱신일:
 
 2026-07-24
+
+
+## 22. 현재 상태 확인 순서
+
+안전 규칙을 읽은 뒤 반드시 다음 문서를 확인합니다.
+
+1. `F:\StoryMaker_beta\ACTIVE_WORK.md`
+2. `F:\StoryMaker_beta\CURRENT_STATE.md`
+3. `F:\StoryMaker_beta\KNOWN_ISSUES.md`
+4. `F:\StoryMaker_beta\ARCHITECTURE.md`
+5. `F:\StoryMaker_beta\WORK_LOGS\00_INDEX.md`
+6. `F:\StoryMaker_beta\WORK_LOGS`의 최신 업무일지
+
+`CURRENT_STATE.md`와 실제 Git 상태가 다르면 Git과 실제 파일을 우선 확인하고, 차이를 사용자에게 보고한 뒤 작업합니다.
+
+문서 우선순위는 다음과 같습니다.
+
+1. `00_READ_FIRST.md`: 절대 안전 규칙
+2. `ACTIVE_WORK.md`: 진행 중 작업과 잠금 대상
+3. `CURRENT_STATE.md`: 현재 상태와 다음 작업
+4. `KNOWN_ISSUES.md`: 알려진 버그와 지뢰
+5. `ARCHITECTURE.md`: 시스템 구조와 파일 책임
+6. `DECISIONS.md`: 장기 구조 결정과 이유
+7. `WORK_LOGS\00_INDEX.md`: 업무일지 탐색 기준
+8. 최신 업무일지
+9. 이전 업무일지
+
+문서와 실제 상태가 충돌하면 다음 순서로 검증합니다.
+
+`Git 상태 → 실행 프로세스 → 실제 소스 → HTTP 응답 → DB·작업 파일 → 문서`
+
+기존 미커밋 파일은 다른 작업자의 진행 중 작업일 수 있습니다. 현재 작업과 무관한 파일은 수정, 스테이징, 복원, 삭제 또는 커밋하지 않습니다.
+
+작업 시작 전 다음 읽기 전용 검사 스크립트를 실행합니다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File F:\StoryMaker_beta\check_before_work.ps1
+```
+
+작업 종료 후 다음 검사 스크립트를 실행합니다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File F:\StoryMaker_beta\check_after_work.ps1
+```
+
+구조 변경 시 `ARCHITECTURE.md`, 새 문제 발견 시 `KNOWN_ISSUES.md`, 현재 상태 변경 시 `CURRENT_STATE.md`, 진행 작업 변경 시 `ACTIVE_WORK.md`, 작업 종료 시 표준 업무일지를 갱신합니다.
+
+표준 업무일지 템플릿:
+
+`F:\StoryMaker_beta\WORK_LOGS\00_WORK_LOG_TEMPLATE.md`
+
+AI 인수인계 체크리스트:
+
+`F:\StoryMaker_beta\AI_HANDOFF_CHECKLIST.md`
