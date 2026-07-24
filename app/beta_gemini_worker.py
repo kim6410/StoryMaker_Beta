@@ -301,6 +301,17 @@ def queue_thumbnail(job_id: str) -> dict[str, Any]:
 @beta_gemini_worker_router.get("/thumbnail/status")
 def thumbnail_status() -> dict[str, Any]:
     with LOCK:
+        gemini_state = read_state()
+        if gemini_state.get("action") == "GENERATE_BETA_GEMINI" and gemini_state.get("status") in {"pending", "claimed", "sent"}:
+            return {
+                "ok": True,
+                "data": {
+                    "status": "idle",
+                    "action": None,
+                    "deferred_for_gemini_job_id": gemini_state.get("job_id"),
+                    "updated_at": now_iso(),
+                },
+            }
         state = read_thumb_state()
         return {"ok": True, "data": state}
 

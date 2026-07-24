@@ -112,6 +112,8 @@
     const order = Array.isArray(content.channel_order) ? content.channel_order : [];
     const readyForRender = order.length === 8 && Boolean(content.podcast_50 || channels.PODCAST_50?.content);
     if (betaUi.renderHandoff) betaUi.renderHandoff.hidden = !readyForRender;
+    const podcastButton = document.getElementById('mp3');
+    if (podcastButton) podcastButton.disabled = !readyForRender;
     if (readyForRender && betaCurrentJobId && window.StoryMakerBetaBrowserRenderer) {
       window.StoryMakerBetaBrowserRenderer.prime(betaCurrentJobId);
     }
@@ -323,6 +325,12 @@ ${content.podcast_80 || content.podcast_script || content.script || ''}\r\n\r\n�
       betaSetStatus(`현재 작업 불러오기 실패: ${error.message}`);
     }
   }
+
+  window.addEventListener('storymaker-beta-renderer-ready', () => {
+    if (betaCurrentJobId && window.StoryMakerBetaBrowserRenderer) {
+      window.StoryMakerBetaBrowserRenderer.prime(betaCurrentJobId);
+    }
+  });
 
   betaRestoreCurrentJob();
 

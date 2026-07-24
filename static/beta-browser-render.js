@@ -1,3 +1,13 @@
+let betaRenderBrowserShortform = null;
+
+async function loadBetaRenderBrowserShortform() {
+  if (betaRenderBrowserShortform) return betaRenderBrowserShortform;
+  const module = await import('./assets/beta-mediabunny-webcodecs-renderer-20260724.js?v=20260724-react299-guard-1');
+  if (typeof module.c !== 'function') throw new Error('Beta Mediabunny/WebCodecs 렌더 함수를 찾지 못했습니다.');
+  betaRenderBrowserShortform = module.c;
+  return betaRenderBrowserShortform;
+}
+
 (() => {
   'use strict';
   const $ = (id) => document.getElementById(id);
@@ -291,52 +301,125 @@
     ui.status.textContent=`팟캐스트 생성 완료 · ${(mp3Blob.size/1024).toFixed(1)}KB`;
   }
 
-  async function renderMp4() {
-    startPreparingProgress('slideshow', 2, 22);
-    const d=refreshDiag();
-    if(!d.mp4MimeType) throw new Error('이 브라우저는 MP4 MediaRecorder를 지원하지 않습니다.');
-    const images=await Promise.all(manifest.images.map(loadImage));
-    const videos=await Promise.all((manifest.videos || []).map(loadVideo));
-    const media=[...images.map((item,index)=>({type:'image',item,index})),...videos.map((item)=>({type:'video',item}))];
-    if (!media.length) throw new Error('렌더링할 이미지 또는 동영상이 없습니다.');
-    if (!gpu.ready) await initWebGPU().catch(()=>false);
-    await prepareGpuTextures(images).catch(()=>{});
-    const wavBuffer=await fetch(manifest.voice_wav).then(r=>r.arrayBuffer());
-    const audioContext=new AudioContext();
-    const audioBuffer=await audioContext.decodeAudioData(wavBuffer.slice(0));
-    const source=audioContext.createBufferSource(); source.buffer=audioBuffer;
-    const destination=audioContext.createMediaStreamDestination(); source.connect(destination); source.connect(audioContext.destination);
-    const stream=ui.canvas.captureStream(30); destination.stream.getAudioTracks().forEach(t=>stream.addTrack(t));
-    const chunks=[]; const recorder=new MediaRecorder(stream,{mimeType:d.mp4MimeType,videoBitsPerSecond:5000000,audioBitsPerSecond:192000});
-    recorder.ondataavailable=(e)=>{if(e.data.size)chunks.push(e.data)};
-    const stopped=new Promise(resolve=>recorder.onstop=resolve);
-    const duration=audioBuffer.duration, started=performance.now();
-    stopPreparingProgress('slideshow');
-    setProgress('slideshow', 25);
-    recorder.start(1000); source.start();
-    await new Promise(resolve=>{
-      function frame(now){
-        const t=(now-started)/1000, p=Math.min(1,t/duration), slot=Math.min(media.length-1,Math.floor(p*media.length));
-        setProgress('slideshow', 25 + p*75);
-        const local=(p*media.length)-slot, current=media[slot];
-        if(current.type==='video'){
-          const clipDuration=Math.max(current.item.duration || 0,0.1);
-          const targetTime=Math.min(clipDuration-0.03,Math.max(0,local*clipDuration));
-          if(Math.abs(current.item.currentTime-targetTime)>0.08) current.item.currentTime=targetTime;
-          drawVideoCover(current.item);
-        }else{
-          drawCover(current.item,local,current.index);
-        }
-        drawSubtitleAndWatermark(t);
-        if(t<duration) requestAnimationFrame(frame); else resolve();
-      } requestAnimationFrame(frame);
+  async function fetchAsFile(url, name, fallbackType='application/octet-stream') {
+    const response = await fetch(url, {cache:'no-store'});
+    if (!response.ok) throw new Error(`미디어 불러오기 실패 · HTTP ${response.status}`);
+    const blob = await response.blob();
+    return new File([blob], name, {type:blob.type || fallbackType});
+  }
+
+  async function seekVideo(video, time) {
+    const target = Math.max(0, Math.min(time, Math.max(0, (video.duration || 0) - 0.05)));
+    if (Math.abs((video.currentTime || 0) - target) < 0.01) return;
+    await new Promise((resolve, reject) => {
+      const done = () => { cleanup(); resolve(); };
+      const fail = () => { cleanup(); reject(new Error('삽입 동영상 프레임을 읽지 못했습니다.')); };
+      const cleanup = () => {
+        video.removeEventListener('seeked', done);
+        video.removeEventListener('error', fail);
+      };
+      video.addEventListener('seeked', done, {once:true});
+      video.addEventListener('error', fail, {once:true});
+      video.currentTime = target;
     });
-    await new Promise(r=>setTimeout(r,300)); recorder.stop(); await stopped; await audioContext.close();
-    mp4Blob=new Blob(chunks,{type:'video/mp4'});
+  }
+
+  async function extractVideoFrameFiles(url, videoIndex) {
+    const video = await loadVideo(url);
+    const duration = Math.max(0.1, Number(video.duration || 0.1));
+    const sampleCount = Math.max(2, Math.min(5, Math.ceil(duration / 2)));
+    const canvas = document.createElement('canvas');
+    canvas.width = 720;
+    canvas.height = 1280;
+    const frameCtx = canvas.getContext('2d');
+    const files = [];
+    for (let index = 0; index < sampleCount; index += 1) {
+      const time = sampleCount === 1 ? 0 : (duration * index) / sampleCount;
+      await seekVideo(video, time);
+      const vw = video.videoWidth || canvas.width;
+      const vh = video.videoHeight || canvas.height;
+      const scale = Math.max(canvas.width / vw, canvas.height / vh);
+      const width = vw * scale;
+      const height = vh * scale;
+      frameCtx.fillStyle = '#000';
+      frameCtx.fillRect(0, 0, canvas.width, canvas.height);
+      frameCtx.drawImage(video, (canvas.width - width) / 2, (canvas.height - height) / 2, width, height);
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+      if (blob) files.push(new File([blob], `video_${videoIndex + 1}_frame_${index + 1}.jpg`, {type:'image/jpeg'}));
+    }
+    video.removeAttribute('src');
+    video.load();
+    return files;
+  }
+
+  async function renderMp4() {
+    startPreparingProgress('slideshow', 2, 20);
+    refreshDiag();
+    if (!('VideoEncoder' in window) || !('AudioEncoder' in window)) {
+      throw new Error('이 브라우저는 WebCodecs H.264/AAC 인코딩을 지원하지 않습니다.');
+    }
+
+    const imageFiles = [];
+    for (let index = 0; index < manifest.images.length; index += 1) {
+      imageFiles.push(await fetchAsFile(manifest.images[index], `image_${String(index + 1).padStart(3, '0')}.jpg`, 'image/jpeg'));
+      setProgress('slideshow', 5 + ((index + 1) / Math.max(1, manifest.images.length)) * 10);
+    }
+
+    const videoUrls = manifest.videos || [];
+    for (let index = 0; index < videoUrls.length; index += 1) {
+      const frames = await extractVideoFrameFiles(videoUrls[index], index);
+      imageFiles.push(...frames);
+      setProgress('slideshow', 15 + ((index + 1) / Math.max(1, videoUrls.length)) * 8);
+    }
+
+    if (!imageFiles.length) throw new Error('렌더링할 이미지 또는 동영상 프레임이 없습니다.');
+    const audioBlob = await fetch(manifest.voice_mp3 || manifest.voice_wav, {cache:'no-store'}).then((response) => {
+      if (!response.ok) throw new Error(`음성 불러오기 실패 · HTTP ${response.status}`);
+      return response.blob();
+    });
+
+    stopPreparingProgress('slideshow');
+    setProgress('slideshow', 24);
+    ui.status.textContent='Mediabunny/WebCodecs 고속 렌더링을 시작합니다.';
+    const startedAt = performance.now();
+    const renderBrowserShortform = await loadBetaRenderBrowserShortform();
+    const result = await renderBrowserShortform({
+      audioBlob,
+      imageFiles,
+      title: manifest.watermark || 'StoryMaker Beta',
+      caption: '',
+      eyebrow: 'StoryMaker Beta',
+      businessName: manifest.watermark || '',
+      businessPhone: '',
+      businessNameFontSize: 32,
+      businessPhoneFontSize: 28,
+      bottomMargin: 80,
+      scriptLines: subtitles.map((cue) => cue.text),
+      subtitleCues: subtitles,
+      subtitleStartSeconds: 0,
+      subtitleDurationSeconds: 180,
+      subtitleFontSize: 42,
+      width: 720,
+      height: 1280,
+      fps: 18,
+      maxDurationSeconds: 180,
+      perfScreen: 'storymaker-beta',
+      onProgress: (progress) => {
+        const raw = Math.max(0, Math.min(100, Number(progress?.percent || 0)));
+        const percent = 24 + raw * 0.74;
+        setProgress('slideshow', percent);
+        const elapsed = Math.max(0.1, (performance.now() - startedAt) / 1000);
+        const remaining = raw > 1 ? Math.max(0, elapsed * (100 - raw) / raw) : 0;
+        ui.status.textContent = `${progress?.stage || '고속 MP4 제작 중'} · ${Math.round(raw)}%${remaining ? ` · 약 ${Math.ceil(remaining)}초 남음` : ''}`;
+      }
+    });
+
+    mp4Blob = result.mp4Blob;
+    if (!mp4Blob || mp4Blob.size < 1024) throw new Error('WebCodecs MP4 결과가 비어 있습니다.');
     ui.video.src=URL.createObjectURL(mp4Blob);ui.video.hidden=false;ui.video.controls=true;ui.upload.disabled=!mp3Blob;
     ui.video.scrollIntoView({behavior:'smooth',block:'nearest'});
     setProgress('slideshow', 100, 'complete');
-    ui.status.textContent=`슬라이드쇼 생성 완료 · ${(mp4Blob.size/1024/1024).toFixed(2)}MB`;
+    ui.status.textContent=`슬라이드쇼 생성 완료 · Mediabunny/WebCodecs · ${(mp4Blob.size/1024/1024).toFixed(2)}MB · ${((performance.now()-startedAt)/1000).toFixed(1)}초`;
   }
 
   async function upload() {
@@ -440,8 +523,12 @@
     loadJob: () => loadJob(),
     refreshDiag: () => refreshDiag()
   };
+  window.dispatchEvent(new CustomEvent('storymaker-beta-renderer-ready'));
   const params=new URLSearchParams(location.search);
   const saved=params.get('job') || sessionStorage.getItem('storymaker_beta_current_job');
-  if(saved){ ui.job.value=saved; setTimeout(()=>loadJob().catch(e=>ui.status.textContent=`불러오기 실패: ${e.message}`),200); }
+  if(saved){
+    window.StoryMakerBetaBrowserRenderer.prime(saved);
+    window.dispatchEvent(new CustomEvent('storymaker-beta-renderer-ready', { detail:{ jobId:saved } }));
+  }
   initWebGPU().finally(refreshDiag);
 })();
