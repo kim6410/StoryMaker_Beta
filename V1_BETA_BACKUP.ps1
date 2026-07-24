@@ -221,34 +221,48 @@ from pathlib import Path
 
 source = Path(sys.argv[1])
 destination = Path(sys.argv[2])
+source_check_file = Path(sys.argv[3])
+backup_check_file = Path(sys.argv[4])
 destination.parent.mkdir(parents=True, exist_ok=True)
 
-with sqlite3.connect(f"file:{source.as_posix()}?mode=ro", uri=True) as src:
-    with sqlite3.connect(destination) as dst:
+source_uri = source.resolve().as_uri() + "?mode=ro"
+with sqlite3.connect(source_uri, uri=True) as src:
+    source_check = src.execute("PRAGMA quick_check").fetchone()[0]
+    source_check_file.write_text(str(source_check), encoding="utf-8")
+    with sqlite3.connect(str(destination)) as dst:
         src.backup(dst)
-        result = dst.execute("PRAGMA integrity_check").fetchone()[0]
-        if result != "ok":
-            raise RuntimeError(f"integrity_check failed: {result}")
+        backup_check = dst.execute("PRAGMA integrity_check").fetchone()[0]
+        backup_check_file.write_text(str(backup_check), encoding="utf-8")
+        if backup_check != "ok":
+            raise RuntimeError(f"integrity_check failed: {backup_check}")
 
 print("SQLITE_BACKUP_OK")
 '@
 
     try {
-        $result = & $PythonExecutable -c $pythonCode $SourceDatabase $DestinationDatabase 2>&1
+        $sqliteHelper = Join-Path $RestoreInfo 'sqlite_online_backup.py'
+        $pythonCode | Out-File -LiteralPath $sqliteHelper -Encoding utf8
+
+        $sourceCheckPath = Join-Path $RestoreInfo 'sqlite_source_quick_check.txt'
+        $backupCheckPath = Join-Path $RestoreInfo 'sqlite_backup_integrity_check.txt'
+        $result = & $PythonExecutable $sqliteHelper $SourceDatabase $DestinationDatabase $sourceCheckPath $backupCheckPath 2>&1
         $result | Out-File -LiteralPath (Join-Path $RestoreInfo 'sqlite_backup_output.txt') -Encoding utf8
 
         if ($LASTEXITCODE -ne 0 -or ($result -notcontains 'SQLITE_BACKUP_OK')) {
-            throw "SQLite backup process failed with exit code $LASTEXITCODE"
+            $detail = ($result | Out-String).Trim()
+            throw "SQLite backup process failed with exit code $LASTEXITCODE :: $detail"
         }
 
-        $sourceQuickCheck = & $PythonExecutable -c "import sqlite3,sys; c=sqlite3.connect('file:'+sys.argv[1].replace('\','/')+'?mode=ro',uri=True); print(c.execute('PRAGMA quick_check').fetchone()[0]); c.close()" $SourceDatabase 2>&1
-        $sourceQuickCheck | Out-File -LiteralPath (Join-Path $RestoreInfo 'sqlite_source_quick_check.txt') -Encoding utf8
+        $sourceQuickCheck = (Get-Content -LiteralPath $sourceCheckPath -ErrorAction Stop | Select-Object -First 1).Trim()
+        $backupIntegrity = (Get-Content -LiteralPath $backupCheckPath -ErrorAction Stop | Select-Object -First 1).Trim()
 
-        $backupIntegrity = & $PythonExecutable -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('PRAGMA integrity_check').fetchone()[0]); c.close()" $DestinationDatabase 2>&1
-        $backupIntegrity | Out-File -LiteralPath (Join-Path $RestoreInfo 'sqlite_backup_integrity_check.txt') -Encoding utf8
+        if ($sourceQuickCheck -ne 'ok') {
+            Add-BackupError "SQLite source quick_check did not return ok: $sourceQuickCheck"
+            return $false
+        }
 
-        if (($backupIntegrity | Select-Object -First 1) -ne 'ok') {
-            Add-BackupError "SQLite backup integrity check did not return ok"
+        if ($backupIntegrity -ne 'ok') {
+            Add-BackupError "SQLite backup integrity_check did not return ok: $backupIntegrity"
             return $false
         }
 
@@ -387,15 +401,15 @@ function Export-GitState {
 
     Push-Location $SourceRoot
     try {
-        Save-CommandOutput (Join-Path $OutputDirectory 'git_head.txt') { git rev-parse HEAD } -Required
-        Save-CommandOutput (Join-Path $OutputDirectory 'git_branch.txt') { git branch --show-current }
-        Save-CommandOutput (Join-Path $OutputDirectory 'git_status_porcelain.txt') { git status --porcelain=v1 --untracked-files=all }
-        Save-CommandOutput (Join-Path $OutputDirectory 'git_status_full.txt') { git status }
-        Save-CommandOutput (Join-Path $OutputDirectory 'git_log_30.txt') { git log -30 --date=iso --decorate --oneline }
-        Save-CommandOutput (Join-Path $OutputDirectory 'git_remote.txt') { git remote -v }
-        Save-CommandOutput (Join-Path $OutputDirectory 'git_diff_worktree.patch') { git diff --binary }
-        Save-CommandOutput (Join-Path $OutputDirectory 'git_diff_staged.patch') { git diff --cached --binary }
-        Save-CommandOutput (Join-Path $OutputDirectory 'git_submodule_status.txt') { git submodule status }
+        [void](Save-CommandOutput (Join-Path $OutputDirectory 'git_head.txt') { git rev-parse HEAD } -Required)
+        [void](Save-CommandOutput (Join-Path $OutputDirectory 'git_branch.txt') { git branch --show-current })
+        [void](Save-CommandOutput (Join-Path $OutputDirectory 'git_status_porcelain.txt') { git status --porcelain=v1 --untracked-files=all })
+        [void](Save-CommandOutput (Join-Path $OutputDirectory 'git_status_full.txt') { git status })
+        [void](Save-CommandOutput (Join-Path $OutputDirectory 'git_log_30.txt') { git log -30 --date=iso --decorate --oneline })
+        [void](Save-CommandOutput (Join-Path $OutputDirectory 'git_remote.txt') { git remote -v })
+        [void](Save-CommandOutput (Join-Path $OutputDirectory 'git_diff_worktree.patch') { git diff --binary })
+        [void](Save-CommandOutput (Join-Path $OutputDirectory 'git_diff_staged.patch') { git diff --cached --binary })
+        [void](Save-CommandOutput (Join-Path $OutputDirectory 'git_submodule_status.txt') { git submodule status })
     }
     finally {
         Pop-Location
@@ -409,22 +423,22 @@ function Export-EnvironmentInventory {
 
     $betaPython = Join-Path $SourceRoot '.venv\Scripts\python.exe'
     if (Test-Path -LiteralPath $betaPython -PathType Leaf) {
-        Save-CommandOutput (Join-Path $OutputDirectory 'python_version.txt') { & $betaPython --version } -Required
-        Save-CommandOutput (Join-Path $OutputDirectory 'python_executable.txt') { & $betaPython -c "import sys; print(sys.executable)" } -Required
-        Save-CommandOutput (Join-Path $OutputDirectory 'python_platform.txt') { & $betaPython -c "import platform; print(platform.platform()); print(platform.python_implementation())" }
-        Save-CommandOutput (Join-Path $OutputDirectory 'pip_version.txt') { & $betaPython -m pip --version }
-        Save-CommandOutput (Join-Path $OutputDirectory 'pip_freeze.txt') { & $betaPython -m pip freeze } -Required
-        Save-CommandOutput (Join-Path $OutputDirectory 'pip_check.txt') { & $betaPython -m pip check }
+        [void](Save-CommandOutput (Join-Path $OutputDirectory 'python_version.txt') { & $betaPython --version } -Required)
+        [void](Save-CommandOutput (Join-Path $OutputDirectory 'python_executable.txt') { & $betaPython -c "import sys; print(sys.executable)" } -Required)
+        [void](Save-CommandOutput (Join-Path $OutputDirectory 'python_platform.txt') { & $betaPython -c "import platform; print(platform.platform()); print(platform.python_implementation())" })
+        [void](Save-CommandOutput (Join-Path $OutputDirectory 'pip_version.txt') { & $betaPython -m pip --version })
+        [void](Save-CommandOutput (Join-Path $OutputDirectory 'pip_freeze.txt') { & $betaPython -m pip freeze } -Required)
+        [void](Save-CommandOutput (Join-Path $OutputDirectory 'pip_check.txt') { & $betaPython -m pip check })
     }
 
     $node = Get-Command node -ErrorAction SilentlyContinue
     if ($node) {
-        Save-CommandOutput (Join-Path $OutputDirectory 'node_version.txt') { node --version }
+        [void](Save-CommandOutput (Join-Path $OutputDirectory 'node_version.txt') { node --version })
     }
 
     $npm = Get-Command npm -ErrorAction SilentlyContinue
     if ($npm) {
-        Save-CommandOutput (Join-Path $OutputDirectory 'npm_version.txt') { npm --version }
+        [void](Save-CommandOutput (Join-Path $OutputDirectory 'npm_version.txt') { npm --version })
     }
 
     try {
@@ -686,15 +700,35 @@ $criticalFiles = @(
     'static\beta-production.js',
     'static\beta-browser-render.js',
     'static\storymaker-beta-gemini-worker.user.js',
-    'data\storymaker_beta.db',
     'start_beta.cmd',
     'start_beta_background.ps1',
     'start_beta_supertonic.cmd',
     'start_beta_supertonic_background.ps1',
-    'V1_BETA_BACKUP.ps1'
+    'V1_BETA_BACKUP.bat',
+    'V1_BETA_BACKUP.ps1',
+    'static\archive.html',
+    'static\beta-archive-detail-fix-20260724.js'
 )
 
 Verify-CriticalHashes -CriticalRelativeFiles $criticalFiles
+
+# SQLite online backups are validated by PRAGMA checks, not by binary SHA-256
+# comparison with the live source database. SQLite page layout can differ even
+# when the logical database contents are identical.
+$sqliteSourceCheckFile = Join-Path $RestoreInfo 'sqlite_source_quick_check.txt'
+$sqliteBackupCheckFile = Join-Path $RestoreInfo 'sqlite_backup_integrity_check.txt'
+if (-not (Test-Path -LiteralPath $backupDatabase -PathType Leaf)) {
+    Add-BackupError 'FAIL backup missing: data\storymaker_beta.db'
+} elseif (-not (Test-Path -LiteralPath $sqliteBackupCheckFile -PathType Leaf)) {
+    Add-BackupError 'FAIL SQLite backup integrity result missing'
+} else {
+    $sqliteBackupCheck = (Get-Content -LiteralPath $sqliteBackupCheckFile -ErrorAction Stop | Select-Object -First 1).Trim()
+    if ($sqliteBackupCheck -ne 'ok') {
+        Add-BackupError "FAIL SQLite backup integrity_check: $sqliteBackupCheck"
+    } else {
+        Write-Log 'SQLite backup integrity_check: ok' 'OK'
+    }
+}
 
 # Verify complete file counts for selected folders.
 $countVerification = [System.Collections.Generic.List[string]]::new()
