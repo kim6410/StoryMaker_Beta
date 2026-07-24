@@ -12,17 +12,17 @@
     script: q('sf-script'), media: q('sf-media-summary'), imageInput: q('sf-images'), videoInput: q('sf-videos'),
     femaleVoice: q('sf-female-voice'), maleVoice: q('sf-male-voice'), voiceSpeed: q('sf-voice-speed'), voiceVolume: q('sf-voice-volume'),
     brandSize: q('sf-brand-size'), phoneSize: q('sf-phone-size'), bottomMargin: q('sf-bottom-margin'),
-    fps: q('sf-fps'), transition: q('sf-transition'), bgmMood: q('sf-bgm-mood'), bgmVolume: q('sf-bgm-volume'),
+    fps: q('sf-fps'), transition: q('sf-transition'), bgmMode: q('sf-bgm-mode'), bgmFile: q('sf-bgm-file'), bgmUpload: q('sf-bgm-upload'), bgmVolume: q('sf-bgm-volume'),
     subtitleSize: q('sf-subtitle-size'), subtitlePosition: q('sf-subtitle-position'),
     previewBrand: q('sf-preview-brand'), previewTitle: q('sf-preview-title'), previewSubtitle: q('sf-preview-subtitle'),
     previewBusiness: q('sf-preview-business'), previewPhone: q('sf-preview-phone'), status: q('sf-status'), progress: q('sf-progress'),
-    log: q('sf-log'), make: q('sf-make'), liveImage: q('sf-live-image'), sceneBadge: q('sf-scene-badge'), play: q('sf-play'), stop: q('sf-stop'), archive: q('sf-archive'), finalVideo: q('sf-final-video'), wave: q('sf-wave')
+    imageConnected:q('sf-image-connected'), videoConnected:q('sf-video-connected'), log: q('sf-log'), make: q('sf-make'), liveImage: q('sf-live-image'), sceneBadge: q('sf-scene-badge'), play: q('sf-play'), stop: q('sf-stop'), archive: q('sf-archive'), finalVideo: q('sf-final-video'), wave: q('sf-wave')
   };
 
   const defaults = {
     female_voice: 'random', male_voice: 'random', voice_speed: 1.35, voice_volume: 0.8,
     brand_size: 46, phone_size: 43, bottom_margin: 80, fps: 24,
-    transition_type: 'random', bgm_mood: 'random', bgm_volume: 0.15,
+    transition_type: 'random', bgm_mode: 'shuffle', bgm_file: '', bgm_volume: 0.15,
     subtitle_size: 30, subtitle_position: 'bottom'
   };
 
@@ -98,7 +98,7 @@
       voice_speed: Number(fields.voiceSpeed.value), voice_volume: Number(fields.voiceVolume.value),
       brand_size: Number(fields.brandSize.value), phone_size: Number(fields.phoneSize.value),
       bottom_margin: Number(fields.bottomMargin.value), fps: Number(fields.fps.value),
-      transition_type: fields.transition.value, bgm_mood: fields.bgmMood.value,
+      transition_type: fields.transition.value, bgm_mode: fields.bgmMode.value, bgm_file: fields.bgmFile.value,
       bgm_volume: Number(fields.bgmVolume.value), subtitle_size: Number(fields.subtitleSize.value),
       subtitle_position: fields.subtitlePosition.value,
       title_line_1: fields.title1.value.trim(), title_line_2: fields.title2.value.trim(),
@@ -113,14 +113,15 @@
     fields.maleVoice.value = s.male_voice;
     fields.voiceSpeed.value = s.voice_speed;
     fields.voiceVolume.value = s.voice_volume;
-    fields.brandSize.value = s.brand_size;
-    fields.phoneSize.value = s.phone_size;
+    fields.brandSize.value = s.brand_size ?? s.brand_font_size ?? 46;
+    fields.phoneSize.value = s.phone_size ?? s.phone_font_size ?? 43;
     fields.bottomMargin.value = s.bottom_margin;
     fields.fps.value = s.fps;
     fields.transition.value = s.transition_type;
-    fields.bgmMood.value = s.bgm_mood;
+    fields.bgmMode.value = s.bgm_mode || 'shuffle';
+    fields.bgmFile.value = s.bgm_file || '';
     fields.bgmVolume.value = s.bgm_volume;
-    fields.subtitleSize.value = s.subtitle_size;
+    fields.subtitleSize.value = s.subtitle_size ?? s.subtitle_font_size ?? 30;
     fields.subtitlePosition.value = s.subtitle_position;
   }
 
@@ -133,6 +134,13 @@
     fields.previewPhone.textContent = fields.phone.value || '010-0000-0000';
     fields.previewBusiness.style.fontSize = `${Math.max(18, Number(fields.brandSize.value) * .55)}px`;
     fields.previewPhone.style.fontSize = `${Math.max(16, Number(fields.phoneSize.value) * .52)}px`;
+  }
+
+  async function loadMusicLibrary() {
+    const data = await request('/beta-api/shortform/music-library');
+    const current = fields.bgmFile.value;
+    fields.bgmFile.innerHTML = '<option value="">무작위 선택</option>' + (data.items || []).map((name)=>`<option value="${name.replace(/"/g,'&quot;')}">${name}</option>`).join('');
+    if ([...fields.bgmFile.options].some((option)=>option.value===current)) fields.bgmFile.value=current;
   }
 
   async function saveDefaults() {
@@ -158,6 +166,9 @@
     fields.phone.value = data.context.business_phone || '';
     fields.script.value = data.context.script || '';
     fields.media.textContent = `이전 단계 미디어 · 이미지 ${data.context.image_count}장 · 동영상 ${data.context.video_count}개`;
+    fields.imageConnected.textContent = `이전 단계 미디어 · 이미지 ${data.context.image_count}장`;
+    fields.videoConnected.textContent = `이전 단계 미디어 · 동영상 ${data.context.video_count}개`;
+    await loadMusicLibrary();
     applySettings(state.settings);
     refreshPreview();
     root.hidden = false;
@@ -207,7 +218,9 @@
       state.startedAt = performance.now(); state.mediaUrls = []; state.mediaNames = []; state.sceneIndex = 0; fields.log.textContent = ''; appendLog('MP4 제작 시작');
       setProgress(12, '브라우저 MP4 렌더러를 준비하는 중...');
       const renderer = await waitForRenderer();
-      const result = await renderer.createVideoOnly(state.jobId, values(), (percent, message, detail) => {
+      const currentValues = values();
+      currentValues.one_time_music_file = fields.bgmMode.value === 'one_time' ? fields.bgmUpload.files?.[0] || null : null;
+      const result = await renderer.createVideoOnly(state.jobId, currentValues, (percent, message, detail) => {
         setProgress(percent, message);
         if (detail) detailLog(detail);
       });

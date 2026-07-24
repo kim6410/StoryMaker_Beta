@@ -199,12 +199,12 @@ ${content.podcast_80 || content.podcast_script || content.script || ''}\r\n\r\n�
     }
   }
 
-  async function betaCreateSupertonicVoice() {
+  async function betaCreateSupertonicVoice(settings = {}) {
     if (!betaCurrentJobId) return;
     if (betaUi.prepareBrowser) betaUi.prepareBrowser.disabled = true;
     betaSetStatus('Beta 전용 Supertonic 7790에서 실제 음성을 생성하는 중...', 35);
     try {
-      const data = await betaRequest(`/beta-api/steps/jobs/${encodeURIComponent(betaCurrentJobId)}/supertonic`, { method: 'POST' });
+      const data = await betaRequest(`/beta-api/steps/jobs/${encodeURIComponent(betaCurrentJobId)}/supertonic`, { method: 'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(settings || {}) });
       betaUi.audio.src = `/beta-api/jobs/${encodeURIComponent(betaCurrentJobId)}/file/audio?t=${Date.now()}`;
       betaUi.audio.hidden = false;
       if (betaUi.debug) betaUi.debug.textContent = `Supertonic 생성 성공\n${JSON.stringify(data, null, 2)}`;

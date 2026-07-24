@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import hashlib
 import re
+import random
 import subprocess
 import urllib.request
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 ROOT = Path(r"F:\StoryMaker_beta")
@@ -92,14 +93,14 @@ def split_dialogue(script: str) -> list[dict[str, str]]:
     return segments
 
 
-def request_supertonic(text: str, voice: str) -> bytes:
+def request_supertonic(text: str, voice: str, speed: float = 1.05) -> bytes:
     payload = json.dumps(
         {
             "model": "supertonic-3",
             "input": text,
             "voice": voice,
             "response_format": "wav",
-            "speed": 1.05,
+            "speed": speed,
         },
         ensure_ascii=False,
     ).encode("utf-8")
@@ -174,7 +175,19 @@ def supertonic_status() -> JSONResponse:
 
 
 @beta_steps_router.post("/jobs/{job_id}/supertonic")
-def create_supertonic_voice(job_id: str) -> JSONResponse:
+async def create_supertonic_voice(job_id: str, request: Request) -> JSONResponse:
+    try:
+        settings = await request.json()
+    except Exception:
+        settings = {}
+    female_voice = str(settings.get("female_voice") or "F1")
+    male_voice = str(settings.get("male_voice") or "M1")
+    if female_voice == "random":
+        female_voice = random.choice(["F1", "F2", "F3", "F4", "F5"])
+    if male_voice == "random":
+        male_voice = random.choice(["M1", "M2", "M3", "M4", "M5"])
+    speed = max(0.7, min(float(settings.get("voice_speed", 1.05) or 1.05), 1.8))
+    voice_volume = max(0.0, min(float(settings.get("voice_volume", 0.8) or 0.8), 1.5))
     path = job_dir(job_id)
     result = read_result(path)
     content = result.get("content", {})
@@ -194,7 +207,8 @@ def create_supertonic_voice(job_id: str) -> JSONResponse:
 
     try:
         for index, segment in enumerate(segments, start=1):
-            audio = request_supertonic(segment["text"], segment["voice"])
+            segment["voice"] = female_voice if str(segment.get("voice", "")).upper().startswith("F") else male_voice
+            audio = request_supertonic(segment["text"], segment["voice"], speed)
             part_path = parts_dir / f"{index:03d}_{segment['voice']}.wav"
             part_path.write_bytes(audio)
             segment["duration"] = round(probe_duration(part_path), 3)
@@ -202,6 +216,10 @@ def create_supertonic_voice(job_id: str) -> JSONResponse:
             part_paths.append(part_path)
         wav_path = output / "voice.wav"
         concatenate_wavs(part_paths, wav_path)
+        if abs(voice_volume - 1.0) > 0.001:
+            adjusted = output / "voice_adjusted.wav"
+            subprocess.run([str(FFMPEG), "-hide_banner", "-loglevel", "error", "-y", "-i", str(wav_path), "-filter:a", f"volume={voice_volume}", str(adjusted)], check=True)
+            adjusted.replace(wav_path)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"여자·남자 Supertonic 대화 음성 생성 실패: {exc}")
 
@@ -223,7 +241,9 @@ def create_supertonic_voice(job_id: str) -> JSONResponse:
     result["tts"] = {
         "engine": "beta-supertonic-dialogue",
         "port": 7790,
-        "voices": {"female": "F1", "male": "M1"},
+        "voices": {"female": female_voice, "male": male_voice},
+        "speed": speed,
+        "volume": voice_volume,
         "segments": len(segments),
     }
     write_result(path, result)
@@ -232,7 +252,9 @@ def create_supertonic_voice(job_id: str) -> JSONResponse:
             "ok": True,
             "dialogue": True,
             "segments": len(segments),
-            "voices": {"female": "F1", "male": "M1"},
+            "voices": {"female": female_voice, "male": male_voice},
+        "speed": speed,
+        "volume": voice_volume,
             "mp3": str(mp3_path),
             "subtitle": str(subtitle_path),
             "duration_seconds": round(duration, 3),

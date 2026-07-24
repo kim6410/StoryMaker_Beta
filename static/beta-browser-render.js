@@ -2,7 +2,7 @@ let betaRenderBrowserShortform = null;
 
 async function loadBetaRenderBrowserShortform() {
   if (betaRenderBrowserShortform) return betaRenderBrowserShortform;
-  const module = await import('./assets/beta-mediabunny-webcodecs-renderer-20260724.js?v=20260724-music-library-subtitle-shadow-1');
+  const module = await import('./assets/beta-mediabunny-webcodecs-renderer-20260724.js?v=20260724-user-settings-transition-position-1');
   if (typeof module.c !== 'function') throw new Error('Beta Mediabunny/WebCodecs 렌더 함수를 찾지 못했습니다.');
   betaRenderBrowserShortform = module.c;
   return betaRenderBrowserShortform;
@@ -352,7 +352,7 @@ async function loadBetaRenderBrowserShortform() {
     return files;
   }
 
-  async function renderMp4(detailCallback = null) {
+  async function renderMp4(settings = {}, detailCallback = null) {
     startPreparingProgress('slideshow', 2, 20);
     refreshDiag();
     if (!('VideoEncoder' in window) || !('AudioEncoder' in window)) {
@@ -386,22 +386,26 @@ async function loadBetaRenderBrowserShortform() {
     const result = await renderBrowserShortform({
       audioBlob,
       imageFiles,
-      title: manifest.watermark || 'StoryMaker Beta',
-      caption: '',
-      eyebrow: 'StoryMaker Beta',
-      businessName: manifest.watermark || '',
-      businessPhone: '',
-      businessNameFontSize: 32,
-      businessPhoneFontSize: 28,
-      bottomMargin: 80,
+      title: settings.title_line_2 || manifest.watermark || 'StoryMaker Beta',
+      caption: settings.title_line_1 || '',
+      eyebrow: settings.title_line_1 || 'StoryMaker Beta',
+      businessName: settings.business_name || manifest.watermark || '',
+      businessPhone: settings.business_phone || '',
+      businessNameFontSize: Number(settings.brand_size || 46),
+      businessPhoneFontSize: Number(settings.phone_size || 43),
+      bottomMargin: Number(settings.bottom_margin || 80),
       scriptLines: subtitles.map((cue) => cue.text),
       subtitleCues: subtitles,
       subtitleStartSeconds: 0,
       subtitleDurationSeconds: 180,
-      subtitleFontSize: 42,
+      subtitleFontSize: Number(settings.subtitle_size || 30),
+
+      subtitlePosition: settings.subtitle_position || 'bottom',
+
+      transitionType: settings.transition_type || 'random',
       width: 720,
       height: 1280,
-      fps: 18,
+      fps: Number(settings.fps || 24),
       maxDurationSeconds: 180,
       perfScreen: 'storymaker-beta',
       onProgress: (progress) => {
@@ -465,7 +469,7 @@ async function loadBetaRenderBrowserShortform() {
     }
   }
 
-  async function ensurePodcastReady() {
+  async function ensurePodcastReady(settings = {}) {
     const currentJobId=ui.job.value.trim();
     if (!currentJobId) throw new Error('현재 작업 ID가 없습니다.');
     manifest=null; mp3Blob=null; mp4Blob=null; subtitles=[];
@@ -474,7 +478,7 @@ async function loadBetaRenderBrowserShortform() {
     ui.audio.hidden=true; ui.video.hidden=true; ui.upload.disabled=true; ui.mp4.disabled=true;
     if (!window.StoryMakerBetaPrepareVoice) throw new Error('현재 PODCAST_50 음성 준비 기능을 찾지 못했습니다.');
     ui.status.textContent='현재 PODCAST_50으로 여자·남자 음성을 새로 만드는 중...';
-    await window.StoryMakerBetaPrepareVoice();
+    await window.StoryMakerBetaPrepareVoice(settings);
     if (ui.job.value.trim()!==currentJobId) throw new Error('음성 생성 중 작업이 변경되었습니다.');
     await loadJob();
   }
@@ -501,7 +505,7 @@ async function loadBetaRenderBrowserShortform() {
     startPreparingProgress('slideshow', 2, 22);
     ui.status.textContent='슬라이드쇼 자원과 영상 프레임을 준비하는 중...';
     try {
-      await renderMp4();
+      await renderMp4({});
     } catch(e) {
       stopPreparingProgress('slideshow');
       setProgress('slideshow',0,'error');
@@ -527,11 +531,17 @@ async function loadBetaRenderBrowserShortform() {
       ui.job.value = String(jobId || '');
       manifest = null; mp3Blob = null; mp4Blob = null; subtitles = [];
       onProgress(12, 'TTS 음성과 SRT 타이밍을 준비하는 중...');
-      await ensurePodcastReady();
+      await ensurePodcastReady(settings);
       onProgress(38, '랜덤 배경음악을 선택하고 음성과 믹싱하는 중...', {type:'media', images:[...(manifest?.images || [])], videos:[...(manifest?.videos || [])]});
-      const prepared = await request(`/beta-api/shortform/jobs/${encodeURIComponent(jobId)}/prepare-audio`, {
-        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(settings)
-      });
+      let prepared;
+      if (settings.bgm_mode === 'one_time' && settings.one_time_music_file) {
+        const form = new FormData();
+        Object.entries(settings).forEach(([key,value]) => { if (key !== 'one_time_music_file' && value != null) form.append(key, String(value)); });
+        form.append('bgm_file_upload', settings.one_time_music_file, settings.one_time_music_file.name);
+        prepared = await request(`/beta-api/shortform/jobs/${encodeURIComponent(jobId)}/prepare-audio`, {method:'POST', body:form});
+      } else {
+        prepared = await request(`/beta-api/shortform/jobs/${encodeURIComponent(jobId)}/prepare-audio`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(settings)});
+      }
       await loadJob();
       onProgress(46, `음악 선택 완료 · ${prepared.music_name || '랜덤 배경음악'}`, {type:'music', musicName:prepared.music_name || ''});
       onProgress(52, '이미지·동영상과 화면 전환을 준비하는 중...');
