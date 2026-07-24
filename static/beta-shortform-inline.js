@@ -5,7 +5,7 @@
   if (!root) return;
 
   const q = (id) => document.getElementById(id);
-  const state = { jobId: '', context: null, settings: null, timer: null, sceneTimer: null, mediaUrls: [], mediaNames: [], sceneIndex: 0, startedAt: 0, lastProgress: 0, readyToSave: false, saving: false };
+  const state = { jobId: '', context: null, settings: null, timer: null, sceneTimer: null, thumbnailTimer: null, thumbnailChecking: false, thumbnailUrl: '', mediaUrls: [], mediaNames: [], sceneIndex: 0, startedAt: 0, lastProgress: 0, readyToSave: false, saving: false, savedToArchive: false, pendingArchiveOpen: false };
 
   const fields = {
     title1: q('sf-title-1'), title2: q('sf-title-2'), business: q('sf-business'), phone: q('sf-phone'),
@@ -16,7 +16,7 @@
     subtitleSize: q('sf-subtitle-size'), subtitlePosition: q('sf-subtitle-position'),
     previewBrand: q('sf-preview-brand'), previewTitle: q('sf-preview-title'), previewSubtitle: q('sf-preview-subtitle'),
     previewBusiness: q('sf-preview-business'), previewPhone: q('sf-preview-phone'), status: q('sf-status'), progress: q('sf-progress'),
-    imageConnected:q('sf-image-connected'), videoConnected:q('sf-video-connected'), log: q('sf-log'), make: q('sf-make'), liveImage: q('sf-live-image'), liveCanvas: q('sf-live-canvas'), sceneBadge: q('sf-scene-badge'), play: q('sf-play'), stop: q('sf-stop'), archive: q('sf-archive'), finalVideo: q('sf-final-video'), wave: q('sf-wave')
+    imageConnected:q('sf-image-connected'), videoConnected:q('sf-video-connected'), log: q('sf-log'), make: q('sf-make'), liveImage: q('sf-live-image'), liveCanvas: q('sf-live-canvas'), sceneBadge: q('sf-scene-badge'), play: q('sf-play'), stop: q('sf-stop'), archive: q('sf-archive'), finalVideo: q('sf-final-video'), wave: q('sf-wave'), thumbnailPanel: q('sf-thumbnail-preview'), thumbnailImage: q('sf-thumbnail-image'), thumbnailLink: q('sf-thumbnail-link'), thumbnailStatus: q('sf-thumbnail-status')
   };
 
   const defaults = {
@@ -129,9 +129,24 @@
     fields.subtitlePosition.value = s.subtitle_position;
   }
 
+  function fitPreviewTitleSingleLine() {
+    const element = fields.previewTitle;
+    if (!element) return;
+    const maxFont = 34;
+    const minFont = 20;
+    element.style.fontSize = `${maxFont}px`;
+    let guard = 0;
+    while (element.scrollWidth > element.clientWidth && parseFloat(element.style.fontSize) > minFont && guard < 30) {
+      const nextSize = Math.max(minFont, parseFloat(element.style.fontSize) - 1);
+      element.style.fontSize = `${nextSize}px`;
+      guard += 1;
+    }
+  }
+
   function refreshPreview() {
     fields.previewBrand.textContent = fields.title1.value || '스토리메이커 연구소';
     fields.previewTitle.textContent = fields.title2.value || '설치 없는 AI 숏폼';
+    requestAnimationFrame(fitPreviewTitleSingleLine);
     const firstLine = fields.script.value.split(/\r?\n/).find((line) => line.trim()) || '팟캐스트 50 대사가 이곳에 표시됩니다.';
     fields.previewSubtitle.textContent = firstLine.replace(/^(여자|남자|여성|남성)\s*[:：]\s*/, '');
     fields.previewBusiness.textContent = fields.business.value || '상호명';
@@ -159,6 +174,49 @@
     state.timer = setTimeout(() => saveDefaults().catch(() => {}), 800);
   }
 
+  function stopThumbnailWatch() {
+    if (state.thumbnailTimer) clearInterval(state.thumbnailTimer);
+    state.thumbnailTimer = null;
+    state.thumbnailChecking = false;
+  }
+
+  function resetThumbnailPreview() {
+    stopThumbnailWatch();
+    state.thumbnailUrl = '';
+    if (fields.thumbnailPanel) fields.thumbnailPanel.hidden = true;
+    if (fields.thumbnailImage) fields.thumbnailImage.removeAttribute('src');
+    if (fields.thumbnailLink) fields.thumbnailLink.setAttribute('href', '#');
+    if (fields.thumbnailStatus) fields.thumbnailStatus.textContent = 'Gemini 썸네일 저장을 확인하는 중...';
+  }
+
+  async function checkThumbnailReady() {
+    if (!state.jobId || state.thumbnailChecking || state.thumbnailUrl) return;
+    state.thumbnailChecking = true;
+    try {
+      const data = await request(`/beta-api/jobs/${encodeURIComponent(state.jobId)}`);
+      const thumbnail = data.job?.assets?.thumbnail;
+      if (!thumbnail) return;
+      const url = `/beta-api/jobs/${encodeURIComponent(state.jobId)}/file/thumbnail?v=${Date.now()}`;
+      state.thumbnailUrl = url;
+      if (fields.thumbnailImage) fields.thumbnailImage.src = url;
+      if (fields.thumbnailLink) fields.thumbnailLink.href = url;
+      if (fields.thumbnailStatus) fields.thumbnailStatus.textContent = 'Gemini 저장 완료 · 보관함과 동일한 썸네일';
+      if (fields.thumbnailPanel) fields.thumbnailPanel.hidden = false;
+      appendLog('Gemini 썸네일 저장 확인 · 미리보기 표시 완료');
+      stopThumbnailWatch();
+    } catch (_) {
+      // Gemini 저장 전의 조회 실패는 다음 확인 주기에서 다시 시도합니다.
+    } finally {
+      state.thumbnailChecking = false;
+    }
+  }
+
+  function startThumbnailWatch() {
+    resetThumbnailPreview();
+    checkThumbnailReady();
+    state.thumbnailTimer = setInterval(checkThumbnailReady, 2000);
+  }
+
   async function loadJob(jobId) {
     state.jobId = jobId;
     const data = await request(`/beta-api/shortform/jobs/${encodeURIComponent(jobId)}/context`);
@@ -179,6 +237,7 @@
     setProgress(0, '팟캐스트50·업체정보·미디어를 불러왔습니다.');
     appendLog(`작업 연결 완료 · ${jobId}`);
     appendLog(`이미지 ${data.context.image_count}장 · 동영상 ${data.context.video_count}개`);
+    startThumbnailWatch();
   }
 
   async function waitForRenderer(timeoutMs = 15000) {
@@ -234,6 +293,8 @@
     if (!state.jobId) return;
     fields.make.disabled = true;
     state.readyToSave = false;
+    state.savedToArchive = false;
+    state.pendingArchiveOpen = false;
     const preview = fields.finalVideo;
     const phone = preview?.closest('.sf-phone');
     try {
@@ -267,7 +328,7 @@
       phone?.classList.add('has-final');
       state.readyToSave = true;
       stopScenePreview();
-      setProgress(100, 'MP4 제작 완료 · 보관함 바로가기를 누르면 저장됩니다.');
+      setProgress(100, 'MP4 제작 완료 · Play·Stop·보관함 버튼을 누르면 저장됩니다.');
       appendLog(`브라우저 제작 완료 · ${result.musicName || '음악 없음'} · 아직 서버에 저장되지 않음`);
       if (fields.sceneBadge) fields.sceneBadge.textContent = '제작 완료 · Play로 확인하세요';
       preview.play().catch(() => {});
@@ -280,23 +341,41 @@
     }
   }
 
-  async function saveAndOpenArchive(event) {
-    event?.preventDefault();
-    if (!state.readyToSave || state.saving) {
-      if (!state.readyToSave) appendLog('보관함 저장 대기 · 먼저 영상 만들기를 완료해 주세요.');
-      return;
+  async function saveCurrentToArchive({ openArchive = false } = {}) {
+    if (!state.readyToSave) {
+      appendLog('보관함 저장 대기 · 먼저 영상 만들기를 완료해 주세요.');
+      return false;
+    }
+    if (state.savedToArchive) {
+      if (openArchive) location.href = '/beta/archive';
+      return true;
+    }
+    if (state.saving) {
+      if (openArchive) {
+        state.pendingArchiveOpen = true;
+        fields.status.textContent = '저장 완료 후 보관함 Beta로 이동합니다.';
+      }
+      return false;
     }
     state.saving = true;
-    fields.archive.setAttribute('aria-disabled','true');
+    state.pendingArchiveOpen = state.pendingArchiveOpen || openArchive;
+    fields.archive.setAttribute('aria-disabled', 'true');
     try {
       fields.status.textContent = 'MP3·MP4를 보관함 Beta에 저장하는 중...';
       const renderer = await waitForRenderer();
       await renderer.saveCurrentToArchive(state.jobId);
-      appendLog('MP3·MP4 서버 저장 성공 · 보관함으로 이동');
-      location.href = '/beta/archive';
+      state.savedToArchive = true;
+      appendLog('MP3·MP4 서버 저장 성공 · 같은 작업은 최신 결과로 덮어쓰기');
+      fields.status.textContent = 'MP3·MP4 보관함 저장 완료';
+      const shouldOpenArchive = state.pendingArchiveOpen;
+      state.pendingArchiveOpen = false;
+      if (shouldOpenArchive) location.href = '/beta/archive';
+      return true;
     } catch (error) {
+      state.pendingArchiveOpen = false;
       appendLog(`보관함 저장 실패 · ${error.message}`);
       fields.status.textContent = `보관함 저장 실패: ${error.message}`;
+      return false;
     } finally {
       state.saving = false;
       fields.archive.removeAttribute('aria-disabled');
@@ -330,10 +409,25 @@
     if (event.key === 'Escape') closeAllAccordions();
   });
 
-    fields.make.addEventListener('click', makeVideo);
-  fields.play?.addEventListener('click', () => { if (fields.finalVideo?.src) fields.finalVideo.play().catch(() => {}); else startScenePreview(); });
-  fields.stop?.addEventListener('click', () => { fields.finalVideo?.pause(); stopScenePreview(); });
-  fields.archive?.addEventListener('click', saveAndOpenArchive);
+  fields.make.addEventListener('click', makeVideo);
+  fields.play?.addEventListener('click', async () => {
+    if (fields.finalVideo?.src) {
+      await saveCurrentToArchive();
+      fields.finalVideo.play().catch(() => {});
+    } else {
+      startScenePreview();
+    }
+  });
+  fields.stop?.addEventListener('click', async () => {
+    fields.finalVideo?.pause();
+    stopScenePreview();
+    if (fields.finalVideo?.src) await saveCurrentToArchive();
+  });
+  fields.archive?.addEventListener('click', async (event) => {
+    event.preventDefault();
+    await saveCurrentToArchive({ openArchive: true });
+  });
 
+  window.addEventListener('pagehide', stopThumbnailWatch);
   window.StoryMakerBetaInlineShortform = { loadJob };
 })();

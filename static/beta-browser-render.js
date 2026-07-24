@@ -2,7 +2,7 @@ let betaRenderBrowserShortform = null;
 
 async function loadBetaRenderBrowserShortform() {
   if (betaRenderBrowserShortform) return betaRenderBrowserShortform;
-  const module = await import('./assets/beta-mediabunny-webcodecs-renderer-20260724.js?v=20260724-user-settings-transition-position-1');
+  const module = await import('./assets/beta-mediabunny-webcodecs-renderer-20260724.js?v=20260725-title-single-line-center-1');
   if (typeof module.c !== 'function') throw new Error('Beta Mediabunny/WebCodecs 렌더 함수를 찾지 못했습니다.');
   betaRenderBrowserShortform = module.c;
   return betaRenderBrowserShortform;
