@@ -307,6 +307,14 @@
     element.addEventListener('input', () => { refreshPreview(); scheduleSave(); });
     element.addEventListener('change', () => { refreshPreview(); scheduleSave(); });
   });
+  function closeAllAccordions() {
+    root.querySelectorAll('[data-accordion]').forEach((button) => {
+      const panel = document.getElementById(button.dataset.accordion);
+      if (panel) panel.hidden = true;
+      button.setAttribute('aria-expanded', 'false');
+    });
+  }
+
   root.querySelectorAll('[data-accordion]').forEach((button) => {
     button.addEventListener('click', () => {
       const panel = document.getElementById(button.dataset.accordion);
@@ -314,7 +322,15 @@
       button.setAttribute('aria-expanded', String(!panel.hidden));
     });
   });
-  fields.make.addEventListener('click', makeVideo);
+
+  document.addEventListener('pointerdown', (event) => {
+    if (!event.target.closest('.sf-accordion')) closeAllAccordions();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeAllAccordions();
+  });
+
+    fields.make.addEventListener('click', makeVideo);
   fields.play?.addEventListener('click', () => { if (fields.finalVideo?.src) fields.finalVideo.play().catch(() => {}); else startScenePreview(); });
   fields.stop?.addEventListener('click', () => { fields.finalVideo?.pause(); stopScenePreview(); });
   fields.archive?.addEventListener('click', saveAndOpenArchive);
