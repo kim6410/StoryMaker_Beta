@@ -113,6 +113,15 @@ def wav_duration(path: Path) -> float:
         return stream.getnframes() / float(stream.getframerate())
 
 
+def strip_speaker_labels(script: str) -> str:
+    cleaned: list[str] = []
+    for raw in str(script or "").splitlines():
+        line = re.sub(r"^\s*(?:여자|여성|female|F1|남자|남성|male|M1)\s*[:：]\s*", "", raw, flags=re.I).strip()
+        if line:
+            cleaned.append(line)
+    return "\n".join(cleaned)
+
+
 def compact_title(value: str, limit: int = 22) -> str:
     text = re.sub(r"\s+", " ", (value or "").strip())
     if len(text) <= limit:
@@ -152,7 +161,7 @@ def shortform_context(job_id: str, request: Request) -> JSONResponse:
     business = result.get("business", {}) or {}
     images = result.get("assets", {}).get("images", []) or []
     videos = result.get("assets", {}).get("videos", []) or []
-    script = content.get("podcast_50") or channels.get("PODCAST_50", {}).get("content") or ""
+    script = strip_speaker_labels(content.get("podcast_50") or channels.get("PODCAST_50", {}).get("content") or "")
     with connect() as connection:
         row = connection.execute(
             "SELECT settings_json FROM beta_shortform_user_settings WHERE user_key=?",
@@ -185,7 +194,8 @@ async def save_settings(request: Request) -> JSONResponse:
     payload = await request.json()
     settings = dict(DEFAULT_SETTINGS)
     if isinstance(payload, dict):
-        settings.update(payload)
+        transient = {"script", "title_line_1", "title_line_2", "business_name", "business_phone", "one_time_music_file"}
+        settings.update({key: value for key, value in payload.items() if key not in transient})
     stamp = now()
     key = user_key(request)
     with connect() as connection:

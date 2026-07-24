@@ -68,6 +68,15 @@ def clean_dialogue_text(value: str) -> str:
     return text.strip()
 
 
+def strip_speaker_labels(script: str) -> str:
+    cleaned: list[str] = []
+    for raw in str(script or "").splitlines():
+        line = re.sub(r"^\s*(?:여자|여성|female|F1|남자|남성|male|M1)\s*[:：]\s*", "", raw, flags=re.I).strip()
+        if line:
+            cleaned.append(line)
+    return "\n".join(cleaned)
+
+
 def split_dialogue(script: str) -> list[dict[str, str]]:
     raw_lines = [line.strip() for line in str(script or "").splitlines() if line.strip()]
     segments: list[dict[str, str]] = []
@@ -206,8 +215,15 @@ async def create_supertonic_voice(job_id: str, request: Request) -> JSONResponse
     voice_volume = max(0.0, min(float(settings.get("voice_volume", 0.8) or 0.8), 1.5))
     path = job_dir(job_id)
     result = read_result(path)
-    content = result.get("content", {})
-    script = content.get("podcast_50") or content.get("podcast_script") or content.get("script") or ""
+    content = result.setdefault("content", {})
+    submitted_script = strip_speaker_labels(str(settings.get("script") or ""))
+    script = submitted_script or strip_speaker_labels(content.get("podcast_50") or content.get("podcast_script") or content.get("script") or "")
+    if submitted_script:
+        content["podcast_50"] = submitted_script
+        channels = content.get("channels")
+        if isinstance(channels, dict) and isinstance(channels.get("PODCAST_50"), dict):
+            channels["PODCAST_50"]["content"] = submitted_script
+        write_result(path, result)
     if not str(script).strip():
         raise HTTPException(status_code=400, detail="PODCAST_50 대본이 없습니다.")
 

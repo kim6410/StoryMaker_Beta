@@ -92,6 +92,10 @@
     if (detail.type === 'saved') appendLog('서버 저장 완료 · 보관함 Beta 연결 가능');
   }
 
+  function stripSpeakerLabels(text) {
+    return String(text || '').split(/\r?\n/).map((line) => line.replace(/^\s*(?:여자|여성|female|F1|남자|남성|male|M1)\s*[:：]\s*/i, '').trim()).filter(Boolean).join('\n');
+  }
+
   function values() {
     return {
       female_voice: fields.femaleVoice.value, male_voice: fields.maleVoice.value,
@@ -103,7 +107,7 @@
       subtitle_position: fields.subtitlePosition.value,
       title_line_1: fields.title1.value.trim(), title_line_2: fields.title2.value.trim(),
       business_name: fields.business.value.trim(), business_phone: fields.phone.value.trim(),
-      script: fields.script.value.trim()
+      script: stripSpeakerLabels(fields.script.value)
     };
   }
 
@@ -164,7 +168,7 @@
     fields.title2.value = data.context.title_line_2 || '';
     fields.business.value = data.context.business_name || '';
     fields.phone.value = data.context.business_phone || '';
-    fields.script.value = data.context.script || '';
+    fields.script.value = stripSpeakerLabels(data.context.script || '');
     fields.media.textContent = `이전 단계 미디어 · 이미지 ${data.context.image_count}장 · 동영상 ${data.context.video_count}개`;
     fields.imageConnected.textContent = `이전 단계 미디어 · 이미지 ${data.context.image_count}장`;
     fields.videoConnected.textContent = `이전 단계 미디어 · 동영상 ${data.context.video_count}개`;
