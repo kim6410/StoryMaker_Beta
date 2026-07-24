@@ -118,7 +118,7 @@
     return mounted || null;
   }
 
-  async function waitPromptBox(timeout = 30000) {
+  async function waitPromptBox(timeout = 55000) {
     const started = Date.now();
     while (Date.now() - started < timeout) {
       const box = promptBox();

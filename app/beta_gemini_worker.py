@@ -8,14 +8,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.beta_gemini import BetaGeminiRequest, beta_build_prompt, beta_parse_content
 
 ROOT = Path(r"F:\StoryMaker_beta")
 JOBS_DIR = ROOT / "data" / "jobs"
-STATE_PATH = ROOT / "data" / "beta_gemini_worker_state.json"
+QUEUE_DIR = ROOT / "data" / "gemini_queue"
 THUMB_STATE_PATH = ROOT / "data" / "beta_thumbnail_worker_state.json"
 LOCK = threading.Lock()
 REQUIRED_WORKER_ID = "tampermonkey-beta-v2-2.1.6"
@@ -26,16 +26,16 @@ ALLOWED_WORKER_IDS = {
     "tampermonkey-beta-v2-2.1.5",
     "tampermonkey-beta-v2-2.1.6",
 }
+ACTIVE_STATUSES = {"pending", "claimed", "sent"}
 
 beta_gemini_worker_router = APIRouter(prefix="/beta-api/gemini-worker", tags=["beta-gemini-worker"])
-
-
 
 
 class ThumbnailResult(BaseModel):
     job_id: str
     worker_id: str = ""
     data_url: str
+
 
 class WorkerAck(BaseModel):
     job_id: str
@@ -67,29 +67,9 @@ def seconds_since(value: str | None) -> float:
         return 0.0
 
 
-def read_state() -> dict[str, Any]:
-    if not STATE_PATH.exists():
-        return {"status": "idle", "updated_at": now_iso()}
-    try:
-        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {"status": "idle", "updated_at": now_iso()}
-
-
-def write_state(state: dict[str, Any]) -> None:
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    state["updated_at"] = now_iso()
-    tmp = STATE_PATH.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(STATE_PATH)
-
-
 def validate_worker(worker_id: str) -> None:
     if worker_id not in ALLOWED_WORKER_IDS:
-        raise HTTPException(
-            status_code=426,
-            detail=f"구형 Beta Worker는 차단되었습니다. {REQUIRED_WORKER_ID}를 설치하세요.",
-        )
+        raise HTTPException(status_code=426, detail=f"구형 Beta Worker는 차단되었습니다. {REQUIRED_WORKER_ID}를 설치하세요.")
 
 
 def valid_job_id(job_id: str) -> bool:
@@ -106,6 +86,80 @@ def load_job(job_id: str) -> tuple[Path, Path, dict[str, Any]]:
     return job_dir, result_path, json.loads(result_path.read_text(encoding="utf-8"))
 
 
+def queue_state_path(job_id: str) -> Path:
+    if not valid_job_id(job_id):
+        raise HTTPException(status_code=400, detail="잘못된 Beta 작업 ID입니다.")
+    return QUEUE_DIR / f"{job_id}.json"
+
+
+def read_job_state(job_id: str) -> dict[str, Any]:
+    path = queue_state_path(job_id)
+    if not path.exists():
+        return {"job_id": job_id, "status": "idle", "action": "GENERATE_BETA_GEMINI", "updated_at": now_iso()}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"job_id": job_id, "status": "idle", "action": "GENERATE_BETA_GEMINI", "updated_at": now_iso()}
+
+
+def write_job_state(state: dict[str, Any]) -> None:
+    job_id = str(state.get("job_id") or "")
+    path = queue_state_path(job_id)
+    QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    state["updated_at"] = now_iso()
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def public_state(state: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in state.items() if k != "prompt"}
+
+
+def all_queue_states() -> list[dict[str, Any]]:
+    QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    rows: list[dict[str, Any]] = []
+    for path in QUEUE_DIR.glob("beta_*.json"):
+        try:
+            rows.append(json.loads(path.read_text(encoding="utf-8")))
+        except Exception:
+            continue
+    rows.sort(key=lambda item: str(item.get("queued_at") or item.get("updated_at") or ""))
+    return rows
+
+
+def next_worker_state() -> dict[str, Any]:
+    for state in all_queue_states():
+        if state.get("status") in ACTIVE_STATUSES:
+            return state
+    return {"status": "idle", "action": None, "updated_at": now_iso()}
+
+
+def build_prompt_for_job(job_id: str) -> tuple[dict[str, Any], str]:
+    _, _, result = load_job(job_id)
+    payload = BetaGeminiRequest(
+        business=result.get("business", {}),
+        topic=result.get("topic", ""),
+        image_count=max(1, len(result.get("assets", {}).get("images", []))),
+    )
+    return result, beta_build_prompt(payload)
+
+
+def update_job_progress(job_id: str, status: str, progress: int, error: str | None = None) -> None:
+    job_dir, _, _ = load_job(job_id)
+    state_path = job_dir / "state.json"
+    state: dict[str, Any] = {}
+    if state_path.exists():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception:
+            state = {}
+    state.update({"beta_job_id": job_id, "status": status, "progress": progress, "updated_at": now_iso(), "last_error": error})
+    tmp = state_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(state_path)
+
+
 def save_content(job_id: str, raw_text: str, source: str) -> dict[str, Any]:
     job_dir, result_path, result = load_job(job_id)
     image_count = max(1, len(result.get("assets", {}).get("images", [])))
@@ -119,6 +173,8 @@ def save_content(job_id: str, raw_text: str, source: str) -> dict[str, Any]:
     content["podcast_script"] = content.get("script", "")
     result["content"] = content
     result["title"] = content.get("title") or result.get("title")
+    result["status"] = "gemini_completed"
+    result["progress"] = 100
     result["gemini"] = {
         "provider": "gemini-web-worker",
         "model": "gemini-web",
@@ -131,7 +187,6 @@ def save_content(job_id: str, raw_text: str, source: str) -> dict[str, Any]:
     channels_dir.mkdir(parents=True, exist_ok=True)
     for key in content["channel_order"]:
         (channels_dir / f"{key}.txt").write_text(content["channels"][key]["content"] + "\n", encoding="utf-8")
-
     (job_dir / "podcast_50.txt").write_text(content["podcast_50"], encoding="utf-8")
     (job_dir / "podcast_80.txt").write_text(content["podcast_80"], encoding="utf-8")
     script = content["podcast_50"]
@@ -146,52 +201,88 @@ def save_content(job_id: str, raw_text: str, source: str) -> dict[str, Any]:
     tmp = result_path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(result_path)
+    update_job_progress(job_id, "gemini_completed", 100, None)
     return result
+
+
+@beta_gemini_worker_router.post("/jobs/{job_id}/prepare")
+def prepare_job(job_id: str) -> dict[str, Any]:
+    result, prompt = build_prompt_for_job(job_id)
+    with LOCK:
+        current = read_job_state(job_id)
+        if current.get("status") == "completed" or result.get("gemini", {}).get("applied") is True:
+            current.update({"status": "completed", "completed_at": result.get("gemini", {}).get("completed_at"), "error": None})
+            write_job_state(current)
+            return {"ok": True, "state": public_state(current)}
+        if current.get("status") in ACTIVE_STATUSES:
+            return {"ok": True, "state": public_state(current)}
+        state = {
+            "job_id": job_id,
+            "project_title": result.get("title") or result.get("topic") or "Beta 프로젝트",
+            "status": "prompt_ready",
+            "action": "GENERATE_BETA_GEMINI",
+            "prompt": prompt,
+            "error": None,
+            "worker_id": None,
+            "prepared_at": now_iso(),
+            "queued_at": current.get("queued_at"),
+            "attempt_count": int(current.get("attempt_count", 0) or 0),
+        }
+        write_job_state(state)
+        update_job_progress(job_id, "prompt_ready", 15, None)
+    return {"ok": True, "state": public_state(state)}
 
 
 @beta_gemini_worker_router.post("/jobs/{job_id}/queue")
 def queue_job(job_id: str) -> dict[str, Any]:
-    _, _, result = load_job(job_id)
-    payload = BetaGeminiRequest(
-        business=result.get("business", {}),
-        topic=result.get("topic", ""),
-        image_count=max(1, len(result.get("assets", {}).get("images", []))),
-    )
+    result, prompt = build_prompt_for_job(job_id)
     with LOCK:
-        state = {
+        current = read_job_state(job_id)
+        if result.get("gemini", {}).get("applied") is True or current.get("status") == "completed":
+            current.update({"status": "completed", "error": None})
+            write_job_state(current)
+            return {"ok": True, "duplicate": True, "state": public_state(current)}
+        if current.get("status") in ACTIVE_STATUSES:
+            return {"ok": True, "duplicate": True, "state": public_state(current)}
+        current.update({
             "job_id": job_id,
             "project_title": result.get("title") or result.get("topic") or "Beta 프로젝트",
             "status": "pending",
             "action": "GENERATE_BETA_GEMINI",
-            "prompt": beta_build_prompt(payload),
+            "prompt": current.get("prompt") or prompt,
             "error": None,
             "worker_id": None,
             "queued_at": now_iso(),
-        }
-        write_state(state)
-    return {"ok": True, "state": {k: v for k, v in state.items() if k != "prompt"}}
+            "attempt_count": int(current.get("attempt_count", 0) or 0) + 1,
+            "retry_available": False,
+        })
+        write_job_state(current)
+        update_job_progress(job_id, "gemini_pending", 20, None)
+    return {"ok": True, "duplicate": False, "state": public_state(current)}
 
 
 @beta_gemini_worker_router.get("/status")
-def worker_status() -> dict[str, Any]:
+def worker_status(job_id: str | None = Query(default=None)) -> dict[str, Any]:
     with LOCK:
-        state = read_state()
-        if state.get("status") == "claimed" and seconds_since(state.get("updated_at")) >= 40:
+        state = read_job_state(job_id) if job_id else next_worker_state()
+        if state.get("status") == "claimed" and seconds_since(state.get("updated_at")) >= 55:
             retry_count = int(state.get("auto_retry_count", 0) or 0)
-            if retry_count < 1:
+            if retry_count < 2:
                 state["status"] = "pending"
                 state["worker_id"] = None
                 state["error"] = None
                 state["auto_retry_count"] = retry_count + 1
                 state["retry_reason"] = "claimed_timeout"
-                write_state(state)
+                write_job_state(state)
             else:
                 state["status"] = "error"
-                state["error"] = "Gemini가 작업을 가져갔지만 40초 안에 전송하지 못했습니다. Gemini 탭을 확인한 뒤 재전송하세요."
+                state["error"] = "Gemini 입력창 전송이 지연되었습니다. AI 원고 생성 버튼을 다시 눌러 재시도하세요."
                 state["retry_available"] = True
-                write_state(state)
-        data = {k: v for k, v in state.items() if k != "prompt"}
+                write_job_state(state)
+                update_job_progress(str(state.get("job_id")), "gemini_error", 0, state["error"])
+        data = public_state(state)
     data["required_worker_id"] = REQUIRED_WORKER_ID
+    data["queue_depth"] = sum(1 for item in all_queue_states() if item.get("status") in ACTIVE_STATUSES)
     return {"ok": True, "data": data}
 
 
@@ -199,46 +290,59 @@ def worker_status() -> dict[str, Any]:
 def retry_job(job_id: str) -> dict[str, Any]:
     load_job(job_id)
     with LOCK:
-        state = read_state()
-        if state.get("job_id") != job_id:
-            raise HTTPException(status_code=409, detail="현재 Gemini 작업 ID와 일치하지 않습니다.")
+        state = read_job_state(job_id)
+        if state.get("status") in ACTIVE_STATUSES:
+            return {"ok": True, "duplicate": True, "state": public_state(state)}
         if not state.get("prompt"):
-            _, _, result = load_job(job_id)
-            payload = BetaGeminiRequest(
-                business=result.get("business", {}),
-                topic=result.get("topic", ""),
-                image_count=max(1, len(result.get("assets", {}).get("images", []))),
-            )
-            state["prompt"] = beta_build_prompt(payload)
-        state["status"] = "pending"
-        state["worker_id"] = None
-        state["error"] = None
-        state["retry_available"] = False
-        state["manual_retry_count"] = int(state.get("manual_retry_count", 0) or 0) + 1
-        state["retried_at"] = now_iso()
-        write_state(state)
-    return {"ok": True, "state": {k: v for k, v in state.items() if k != "prompt"}}
+            _, prompt = build_prompt_for_job(job_id)
+            state["prompt"] = prompt
+        state.update({
+            "job_id": job_id,
+            "status": "pending",
+            "action": "GENERATE_BETA_GEMINI",
+            "worker_id": None,
+            "error": None,
+            "retry_available": False,
+            "manual_retry_count": int(state.get("manual_retry_count", 0) or 0) + 1,
+            "queued_at": now_iso(),
+            "retried_at": now_iso(),
+        })
+        write_job_state(state)
+        update_job_progress(job_id, "gemini_pending", 20, None)
+    return {"ok": True, "duplicate": False, "state": public_state(state)}
 
 
 @beta_gemini_worker_router.get("/prompt/{job_id}")
 def worker_prompt(job_id: str) -> dict[str, Any]:
-    state = read_state()
-    if state.get("job_id") != job_id:
-        raise HTTPException(status_code=404, detail="대기 중인 작업이 아닙니다.")
-    return {"ok": True, "job_id": job_id, "prompt": state.get("prompt", "")}
+    state = read_job_state(job_id)
+    prompt = str(state.get("prompt") or "")
+    if not prompt:
+        _, prompt = build_prompt_for_job(job_id)
+    return {"ok": True, "job_id": job_id, "prompt": prompt, "status": state.get("status")}
 
 
 @beta_gemini_worker_router.post("/ack")
 def worker_ack(payload: WorkerAck) -> dict[str, Any]:
     validate_worker(payload.worker_id)
     with LOCK:
-        state = read_state()
-        if state.get("job_id") != payload.job_id:
-            raise HTTPException(status_code=409, detail="현재 작업 ID와 일치하지 않습니다.")
+        state = read_job_state(payload.job_id)
+        if state.get("status") == "completed":
+            return {"ok": True, "status": "completed", "worker_id": payload.worker_id}
+        if payload.status == "claimed" and state.get("status") not in {"pending", "claimed"}:
+            raise HTTPException(status_code=409, detail="현재 작업은 전송 대기 상태가 아닙니다.")
         state["status"] = payload.status
         state["worker_id"] = payload.worker_id
         state["error"] = payload.error
-        write_state(state)
+        if payload.status == "sent":
+            state["sent_at"] = now_iso()
+            update_job_progress(payload.job_id, "gemini_sent", 40, None)
+        elif payload.status == "claimed":
+            state["claimed_at"] = now_iso()
+            update_job_progress(payload.job_id, "gemini_claimed", 30, None)
+        elif payload.status == "error":
+            state["retry_available"] = True
+            update_job_progress(payload.job_id, "gemini_error", 0, payload.error)
+        write_job_state(state)
     return {"ok": True, "status": payload.status, "worker_id": payload.worker_id}
 
 
@@ -246,15 +350,14 @@ def worker_ack(payload: WorkerAck) -> dict[str, Any]:
 def worker_result(payload: WorkerResult) -> dict[str, Any]:
     result = save_content(payload.job_id, payload.result_text, payload.source)
     with LOCK:
-        state = read_state()
-        if state.get("job_id") == payload.job_id:
-            state["status"] = "completed"
-            state["completed_at"] = now_iso()
-            state["error"] = None
-            state.pop("prompt", None)
-            write_state(state)
+        state = read_job_state(payload.job_id)
+        state["status"] = "completed"
+        state["completed_at"] = now_iso()
+        state["error"] = None
+        state["retry_available"] = False
+        state.pop("prompt", None)
+        write_job_state(state)
     return {"ok": True, "job": result}
-
 
 
 def read_thumb_state() -> dict[str, Any]:
@@ -305,8 +408,8 @@ def queue_thumbnail(job_id: str) -> dict[str, Any]:
 @beta_gemini_worker_router.get("/thumbnail/status")
 def thumbnail_status() -> dict[str, Any]:
     with LOCK:
-        gemini_state = read_state()
-        if gemini_state.get("action") == "GENERATE_BETA_GEMINI" and gemini_state.get("status") in {"pending", "claimed", "sent"}:
+        gemini_state = next_worker_state()
+        if gemini_state.get("action") == "GENERATE_BETA_GEMINI" and gemini_state.get("status") in ACTIVE_STATUSES:
             return {
                 "ok": True,
                 "data": {
