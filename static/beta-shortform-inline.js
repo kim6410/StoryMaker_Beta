@@ -16,7 +16,7 @@
     subtitleSize: q('sf-subtitle-size'), subtitlePosition: q('sf-subtitle-position'),
     previewBrand: q('sf-preview-brand'), previewTitle: q('sf-preview-title'), previewSubtitle: q('sf-preview-subtitle'),
     previewBusiness: q('sf-preview-business'), previewPhone: q('sf-preview-phone'), status: q('sf-status'), progress: q('sf-progress'),
-    imageConnected:q('sf-image-connected'), videoConnected:q('sf-video-connected'), log: q('sf-log'), make: q('sf-make'), liveImage: q('sf-live-image'), liveCanvas: q('sf-live-canvas'), sceneBadge: q('sf-scene-badge'), play: q('sf-play'), stop: q('sf-stop'), archive: q('sf-archive'), finalVideo: q('sf-final-video'), wave: q('sf-wave'), thumbnailPanel: q('sf-thumbnail-preview'), thumbnailImage: q('sf-thumbnail-image'), thumbnailLink: q('sf-thumbnail-link'), thumbnailStatus: q('sf-thumbnail-status')
+    imageConnected:q('sf-image-connected'), videoConnected:q('sf-video-connected'), log: q('sf-log'), make: q('sf-make'), liveImage: q('sf-live-image'), liveCanvas: q('sf-live-canvas'), sceneBadge: q('sf-scene-badge'), play: q('sf-play'), stop: q('sf-stop'), archive: q('sf-archive'), finalVideo: q('sf-final-video'), wave: q('sf-wave'), thumbnailPanel: q('sf-thumbnail-preview'), thumbnailImage: q('sf-thumbnail-image'), thumbnailLink: q('sf-thumbnail-link'), thumbnailStatus: q('sf-thumbnail-status'), thumbnailArchive: q('sf-thumbnail-archive')
   };
 
   const defaults = {
@@ -424,6 +424,10 @@
     if (fields.finalVideo?.src) await saveCurrentToArchive();
   });
   fields.archive?.addEventListener('click', async (event) => {
+    event.preventDefault();
+    await saveCurrentToArchive({ openArchive: true });
+  });
+  fields.thumbnailArchive?.addEventListener('click', async (event) => {
     event.preventDefault();
     await saveCurrentToArchive({ openArchive: true });
   });
